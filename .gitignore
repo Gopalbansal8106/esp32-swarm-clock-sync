@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+*.stackdump
+venv/
+.venv/
+env/
+01_simulation_dashboard/venv/
+03_hardware_dashboard/venv/

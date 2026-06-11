@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Low-Cost Wireless Clock Synchronization (ESP-NOW)</title>
+    
+    <!-- External Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- External Libraries -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-main: #f1f5f9;
+            --bg-card: #ffffff;
+            --primary: #3b82f6;
+            --primary-light: #eff6ff;
+            --primary-dim: #2563eb;
+            --success: #10b981;
+            --success-light: #ecfdf5;
+            --error: #ef4444;
+            --error-light: #fef2f2;
+            --warning: #f59e0b;
+            --warning-light: #fffbeb;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
+            --shadow-hover: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            --radius: 20px;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ============ TOP NAVIGATION ============ */
+        .navbar {
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            z-index: 100;
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .nav-logo-icon {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dim) 100%);
+            color: white;
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 4px 14px rgba(59, 130, 246, 0.3);
+        }
+
+        .nav-title h1 {
+            font-size: 22px;
+            font-weight: 800;
+            color: var(--text-main);
+            letter-spacing: -0.5px;
+        }
+
+        .nav-title p {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .nav-controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        /* Mode Switcher Toggle */
+        .mode-toggle-container {
+            display: flex;
+            align-items: center;
+            background-color: #f1f5f9;
+            padding: 4px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .mode-toggle-btn {
+            padding: 8px 18px;
+            border-radius: 9px;
+            border: none;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: transparent;
+            color: var(--text-muted);
+        }
+
+        .mode-toggle-btn.active {
+            background-color: var(--bg-card);
+            color: var(--primary-dim);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background-color: var(--success-light);
+            color: var(--success);
+            padding: 8px 16px;
+            border-radius: 30px;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background-color: var(--success);
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.6; }
+        }
+
+        /* ============ DASHBOARD BODY ============ */
+        .dashboard-container {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 310px 1fr 410px;
+            gap: 24px;
+            padding: 24px;
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        /* ============ COMMON PANELS ============ */
+        .panel {
+            background-color: var(--bg-card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0;
+            transition: box-shadow 0.3s ease;
+        }
+
+        .panel:hover {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.03), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
+        }
+
+        .panel-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #fafbfd;
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: var(--text-main);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel-icon {
+            font-size: 18px;
+            color: var(--primary);
+        }
+
+        .panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .sidebar-left {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+            min-height: 0;
+            padding-right: 6px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            background-color: #f8fafc;
+            padding: 16px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .control-label {
+            font-size: 12px;
+            font-weight: 800;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background-color: var(--bg-card);
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+
+        .btn:hover {
+            border-color: var(--primary);
+            color: var(--primary-dim);
+            background-color: var(--primary-light);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dim) 100%);
+            color: white;
+            border: none;
+            box-shadow: 0 4px 10px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dim);
+            color: white;
+            box-shadow: 0 6px 14px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-danger {
+            color: var(--error);
+            border-color: rgba(239, 68, 68, 0.2);
+            background-color: var(--error-light);
+        }
+
+        .btn-danger:hover {
+            background-color: var(--error);
+            color: white;
+            border-color: var(--error);
+        }
+
+        /* Range Sliders styling */
+        .range-slider-container {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 100%;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .slider-val {
+            color: var(--primary-dim);
+            font-weight: 800;
+        }
+
+        .custom-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 10px;
+            background: #e2e8f0;
+            outline: none;
+        }
+
+        .custom-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary-dim);
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            transition: transform 0.1s ease;
+        }
+
+        .custom-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.25);
+        }
+
+        /* ============ CENTER COLUMN: TOPOLOGY & METRICS ============ */
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+        }
+
+        .metric-card {
+            background-color: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            padding: 18px;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .metric-card::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: var(--border);
+        }
+
+        .metric-card.primary-accent::after {
+            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-dim) 100%);
+        }
+
+        .metric-card.success-accent::after {
+            background: var(--success);
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-hover);
+        }
+
+        .metric-label {
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .metric-value {
+            font-size: 22px;
+            font-weight: 800;
+            color: var(--text-main);
+        }
+
+        .metric-value.highlight {
+            color: var(--primary-dim);
+        }
+
+        /* Center column: main-content ============ */
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        /* Network Topology Panel */
+        .topology-panel {
+            flex: 1;
+            position: relative;
+            min-height: 0;
+        }
+
+        .canvas-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            background-color: #fafbfc;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        #topology-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* ============ RIGHT COLUMN: ANALYTICS & NODES ============ */
+        .sidebar-right {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+            min-height: 0;
+            padding-right: 6px;
+        }
+
+        .chart-wrapper {
+            height: 165px;
+            border-radius: 8px;
+            background-color: var(--bg-card);
+        }
+
+        /* Node Status List */
+        .node-list-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .node-list-panel .panel-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+        }
+
+        .node-cards-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding-right: 6px;
+        }
+
+        .node-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 16px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .node-card:hover {
+            box-shadow: var(--shadow);
+            border-color: var(--primary);
+        }
+
+        .node-card.ref-node {
+            border-color: var(--success);
+            background-color: var(--success-light);
+        }
+
+        .node-card.drifted-node {
+            border-color: var(--error);
+            background-color: var(--error-light);
+        }
+
+        .node-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .node-name {
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .node-badge {
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background-color: var(--border);
+            color: var(--text-muted);
+        }
+
+        .node-badge.ref {
+            background-color: var(--success);
+            color: white;
+        }
+
+        .node-badge.drifted {
+            background-color: var(--error);
+            color: white;
+        }
+
+        .node-card-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .node-info-label {
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .node-info-val {
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        /* Node card individual slider styling */
+        .node-drift-control {
+            border-top: 1px solid var(--border);
+            padding-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        /* Scrollbar styles */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <!-- TOP NAVIGATION NAVBAR -->
+    <div class="navbar">
+        <div class="nav-logo">
+            <div class="nav-logo-icon">⚡</div>
+            <div class="nav-title">
+                <h1>Distributed Clock Sync Dashboard</h1>
+                <p>GPS-Denied Autonomous Time Synchronization (ESP-NOW Simulator)</p>
+            </div>
+        </div>
+        <div class="nav-controls">
+            <div class="mode-toggle-container">
+                <button id="mode-basic-btn" class="mode-toggle-btn" onclick="toggleSyncMode('basic')">Basic One-Way</button>
+                <button id="mode-espnow-btn" class="mode-toggle-btn active" onclick="toggleSyncMode('espnow')">ESP-NOW Two-Way</button>
+            </div>
+            
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                <span id="system-status">Active</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN DASHBOARD CONTENT -->
+    <div class="dashboard-container">
+        
+        <!-- LEFT PANEL: CONTROLS -->
+        <div class="sidebar-left">
+            <div class="panel" style="flex: 1;">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="panel-icon">⚙️</span> Control Console
+                    </div>
+                </div>
+                <div class="panel-body" style="display: flex; flex-direction: column; gap: 20px;">
+                    
+                    <div class="control-group">
+                        <span class="control-label">Impairment Sliders</span>
+                        <div class="range-slider-container">
+                            <div class="slider-header">
+                                <span>Packet Loss Rate:</span>
+                                <span class="slider-val" id="loss-slider-val">1%</span>
+                            </div>
+                            <input type="range" class="custom-slider" id="loss-rate-slider" min="0" max="100" value="1" oninput="updatePacketLoss(this.value)">
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <span class="control-label">Simulation State</span>
+                        <button class="btn btn-primary" onclick="sendCommand('start_sync')">▶ Start Synchronization</button>
+                        <button class="btn btn-danger" onclick="sendCommand('stop_sync')">■ Stop Synchronization</button>
+                    </div>
+                    
+                    <div class="control-group">
+                        <span class="control-label">Node Swarm Control</span>
+                        <button class="btn" onclick="sendCommand('add_node')">➕ Add Swarm Node</button>
+                        <button class="btn" onclick="sendCommand('remove_node')">➖ Remove Swarm Node</button>
+                    </div>
+                    
+                    <div class="control-group">
+                        <span class="control-label">Triggers</span>
+                        <button class="btn" onclick="sendCommand('simulate_faulty_node')">🔴 Inject Faulty Node</button>
+                    </div>
+                    
+                    <div class="control-group" style="margin-top: auto;">
+                        <button class="btn" onclick="sendCommand('reset')" style="border-color: #cbd5e1;">🔄 Full Reset System</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CENTER PANEL: TOPOLOGY AND METRICS -->
+        <div class="main-content">
+            <!-- Metrics Cards Grid -->
+            <div class="metrics-grid">
+                <div class="metric-card primary-accent">
+                    <span class="metric-label">Active Nodes</span>
+                    <span id="metric-nodes" class="metric-value">4</span>
+                </div>
+                <div class="metric-card primary-accent">
+                    <span class="metric-label">Avg Sync Error</span>
+                    <span id="metric-error" class="metric-value highlight">0.00 ms</span>
+                </div>
+                <div class="metric-card primary-accent">
+                    <span class="metric-label">Total Packets</span>
+                    <span id="metric-packets" class="metric-value">0</span>
+                </div>
+                <div class="metric-card success-accent">
+                    <span class="metric-label">Sync Quality</span>
+                    <span id="metric-quality" class="metric-value" style="color: var(--success);">100%</span>
+                </div>
+            </div>
+
+            <!-- Visual Topology View -->
+            <div class="panel topology-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="panel-icon">🌐</span> Inter-Node Mesh Network Topology
+                    </div>
+                </div>
+                <div class="panel-body" style="padding: 0;">
+                    <div class="canvas-container">
+                        <canvas id="topology-canvas"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT PANEL: ANALYTICS & MONITOR -->
+        <div class="sidebar-right">
+            <!-- Graphs Panel -->
+            <div class="panel" style="height: 380px;">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="panel-icon">📈</span> Live Sync Analytics
+                    </div>
+                </div>
+                <div class="panel-body" style="padding: 12px; display: flex; flex-direction: column; gap: 12px; overflow: hidden;">
+                    <div class="chart-wrapper" id="clock-graph"></div>
+                    <div class="chart-wrapper" id="error-graph"></div>
+                </div>
+            </div>
+
+            <!-- Swarm Nodes List -->
+            <div class="panel node-list-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="panel-icon">🖥️</span> Swarm Nodes Monitor
+                    </div>
+                </div>
+                <div class="panel-body" style="padding: 15px;">
+                    <div class="node-cards-container" id="nodes-container">
+                        <!-- Dynamically filled with node info cards -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- JavaScript Execution -->
+    <script>
+        let simulationState = {
+            nodes: {},
+            globalTime: 0,
+            syncActive: false,
+            totalPackets: 0,
+            avgError: 0,
+            syncHistory: [],
+            masterId: null,
+            syncMode: 'espnow'
+        };
+
+        const config = {
+            nodeRadius: 18,
+            refRadius: 24,
+            colors: {
+                ref: '#10b981',       /* green */
+                slave: '#3b82f6',     /* blue */
+                drifted: '#ef4444',   /* red */
+                unsynced: '#94a3b8',  /* gray */
+                lineSynced: '#10b981',
+                lineUnsynced: '#cbd5e1'
+            }
+        };
+
+        let ws = null;
+        let reconnectAttempts = 0;
+
+        function connectWebSocket() {
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    console.log('✅ Connected to Simulation WebSocket');
+                    reconnectAttempts = 0;
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        if (message.type === 'state') {
+                            updateState(message.data);
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse state:', e);
+                    }
+                };
+
+                ws.onclose = () => {
+                    attemptReconnect();
+                };
+            } catch (e) {
+                attemptReconnect();
+            }
+        }
+
+        function attemptReconnect() {
+            if (reconnectAttempts < 10) {
+                reconnectAttempts++;
+                setTimeout(connectWebSocket, 1500 * reconnectAttempts);
+            }
+        }
+
+        function sendCommand(command, params = {}) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: command, ...params }));
+            }
+        }
+
+        function toggleSyncMode(mode) {
+            sendCommand('toggle_sync_mode', { mode: mode });
+        }
+
+        function updatePacketLoss(val) {
+            document.getElementById('loss-slider-val').textContent = val + '%';
+            sendCommand('inject_packet_loss', { rate: parseFloat(val) / 100.0 });
+        }
+
+        function updateNodeDrift(nodeId, val) {
+            document.getElementById(`drift-val-${nodeId}`).textContent = val + ' PPM';
+            sendCommand('set_node_drift', { node_id: parseInt(nodeId), drift: parseFloat(val) });
+        }
+
+        function updateState(newState) {
+            simulationState = {
+                nodes: {},
+                globalTime: newState.global_time || 0,
+                syncActive: newState.sync_active || false,
+                totalPackets: newState.total_packets_sent || 0,
+                avgError: newState.avg_sync_error || 0,
+                syncHistory: newState.sync_history || [],
+                masterId: newState.master_id,
+                syncMode: newState.sync_mode || 'espnow',
+                isHardware: newState.is_hardware || false
+            };
+
+            if (newState.nodes) {
+                newState.nodes.forEach(node => {
+                    simulationState.nodes[node.node_id] = node;
+                });
+            }
+
+            // Show or hide hardware connection badge
+            const hwBadge = document.getElementById('hw-badge');
+            if (hwBadge) {
+                hwBadge.style.display = simulationState.isHardware ? 'flex' : 'none';
+            }
+
+            updateUI();
+        }
+
+        function updateUI() {
+            // Update Sync Mode switch state
+            const basicBtn = document.getElementById('mode-basic-btn');
+            const espnowBtn = document.getElementById('mode-espnow-btn');
+            if (simulationState.syncMode === 'basic') {
+                basicBtn.classList.add('active');
+                espnowBtn.classList.remove('active');
+            } else {
+                basicBtn.classList.remove('active');
+                espnowBtn.classList.add('active');
+            }
+
+            // Status Badge
+            const statusLabel = document.getElementById('system-status');
+            statusLabel.textContent = simulationState.syncActive ? 'Synchronizing' : 'Idle';
+            statusLabel.parentElement.style.backgroundColor = simulationState.syncActive ? 'var(--success-light)' : 'var(--warning-light)';
+            statusLabel.parentElement.style.color = simulationState.syncActive ? 'var(--success)' : 'var(--warning)';
+
+            // Metrics Cards
+            const nodeCount = Object.keys(simulationState.nodes).length;
+            document.getElementById('metric-nodes').textContent = nodeCount;
+            document.getElementById('metric-packets').textContent = simulationState.totalPackets;
+            
+            const errorVal = simulationState.avgError * 1000;
+            document.getElementById('metric-error').textContent = errorVal.toFixed(3) + ' ms';
+            
+            // Calculate Sync Quality
+            let quality = 0;
+            if (simulationState.syncActive) {
+                quality = Math.max(0, 100 - (errorVal * 50));
+            } else {
+                quality = 0;
+            }
+            document.getElementById('metric-quality').textContent = quality.toFixed(0) + '%';
+
+            // Node Cards List
+            const nodesContainer = document.getElementById('nodes-container');
+            
+            // Remember user interaction (like dragging sliders) by only updating content if not active
+            Object.values(simulationState.nodes).forEach(node => {
+                const existingCard = document.getElementById(`node-card-${node.node_id}`);
+                const isRef = node.is_elected_ref;
+                const name = isRef ? `Swarm Leader (#${node.node_id})` : `Drone Node #${node.node_id}`;
+                const badgeText = isRef ? 'Leader' : (node.is_faulty ? 'Faulty' : node.sync_state);
+                const badgeClass = isRef ? 'ref' : (node.sync_state === 'drifted' || node.is_faulty ? 'drifted' : '');
+                
+                const cardHTML = `
+                    <div class="node-card-header">
+                        <span class="node-name">${name}</span>
+                        <span class="node-badge ${badgeClass}">${badgeText}</span>
+                    </div>
+                    <div class="node-card-grid">
+                        <div>
+                            <span class="node-info-label">Offset:</span>
+                            <span class="node-info-val">${(node.offset * 1000).toFixed(3)} ms</span>
+                        </div>
+                        <div>
+                            <span class="node-info-label">Drift:</span>
+                            <span class="node-info-val" id="drift-display-${node.node_id}">${node.drift_rate.toFixed(1)} PPM</span>
+                        </div>
+                        <div>
+                            <span class="node-info-label">Kalman Est:</span>
+                            <span class="node-info-val">${(node.kalman_offset * 1000).toFixed(2)} ms</span>
+                        </div>
+                        <div>
+                            <span class="node-info-label">Lat Est:</span>
+                            <span class="node-info-val">${node.latency_estimate.toFixed(1)} ms</span>
+                        </div>
+                    </div>
+                    <div class="node-drift-control">
+                        <div class="slider-header">
+                            <span class="node-info-label">Adjust Target Drift:</span>
+                            <span class="slider-val" id="drift-val-${node.node_id}">${node.drift_rate.toFixed(0)} PPM</span>
+                        </div>
+                        <input type="range" class="custom-slider" min="-2000" max="2000" value="${node.drift_rate}" 
+                               oninput="updateNodeDrift(${node.node_id}, this.value)">
+                    </div>
+                `;
+
+                if (existingCard) {
+                    // Update only text displays, but do not replace the entire element to prevent resetting slider state if dragging
+                    const isDragging = (document.activeElement && document.activeElement.parentElement && document.activeElement.parentElement.parentElement === existingCard);
+                    if (!isDragging) {
+                        existingCard.innerHTML = cardHTML;
+                    } else {
+                        // Just update values non-destructively
+                        const displayVals = existingCard.querySelectorAll('.node-info-val');
+                        if (displayVals.length >= 4) {
+                            displayVals[0].textContent = (node.offset * 1000).toFixed(3) + ' ms';
+                            displayVals[1].textContent = node.drift_rate.toFixed(1) + ' PPM';
+                            displayVals[2].textContent = (node.kalman_offset * 1000).toFixed(2) + ' ms';
+                            displayVals[3].textContent = node.latency_estimate.toFixed(1) + ' ms';
+                        }
+                    }
+                    
+                    // Maintain classes
+                    existingCard.className = 'node-card';
+                    if (isRef) existingCard.classList.add('ref-node');
+                    else if (node.sync_state === 'drifted') existingCard.classList.add('drifted-node');
+                } else {
+                    const card = document.createElement('div');
+                    card.id = `node-card-${node.node_id}`;
+                    card.className = 'node-card';
+                    if (isRef) card.classList.add('ref-node');
+                    else if (node.sync_state === 'drifted') card.classList.add('drifted-node');
+                    card.innerHTML = cardHTML;
+                    nodesContainer.appendChild(card);
+                }
+            });
+
+            // Clean up removed nodes from UI
+            Array.from(nodesContainer.children).forEach(child => {
+                const idStr = child.id.replace('node-card-', '');
+                if (!simulationState.nodes[idStr]) {
+                    child.remove();
+                }
+            });
+
+            // Update graphs and network topology
+            updateCharts();
+        }
+
+        // ============ TOPOLOGY DRAWING ============
+        function drawTopology() {
+            const canvas = document.getElementById('topology-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const nodes = Object.values(simulationState.nodes);
+            if (nodes.length === 0) return;
+
+            // Draw grid pattern in canvas background
+            ctx.strokeStyle = '#f1f5f9';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 40) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 40) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.min(canvas.width, canvas.height) / 2 - 50;
+            const positions = {};
+
+            // Calculate positions
+            nodes.forEach((node, idx) => {
+                const angle = (idx * 2 * Math.PI) / nodes.length - Math.PI / 2;
+                positions[node.node_id] = {
+                    x: centerX + radius * Math.cos(angle),
+                    y: centerY + radius * Math.sin(angle)
+                };
+            });
+
+            const electedRef = nodes.find(n => n.is_elected_ref);
+
+            // Draw Links
+            nodes.forEach(node => {
+                if (node.is_elected_ref) return;
+                const ref = electedRef || nodes.find(n => n.is_master);
+                if (!ref) return;
+
+                const start = positions[ref.node_id];
+                const end = positions[node.node_id];
+
+                ctx.beginPath();
+                ctx.moveTo(start.x, start.y);
+                ctx.lineTo(end.x, end.y);
+                ctx.strokeStyle = node.sync_state === 'synchronized' ? config.colors.ref : config.colors.lineUnsynced;
+                ctx.lineWidth = node.sync_state === 'synchronized' ? 2 : 1;
+                ctx.setLineDash([6, 4]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            });
+
+            // Draw Nodes
+            nodes.forEach(node => {
+                const pos = positions[node.node_id];
+                const isRef = node.is_elected_ref;
+                const size = isRef ? config.refRadius : config.nodeRadius;
+
+                // Outer Shadow Glow
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, size + 8, 0, 2 * Math.PI);
+                ctx.fillStyle = isRef ? 'rgba(16, 185, 129, 0.08)' : 'rgba(59, 130, 246, 0.04)';
+                ctx.fill();
+
+                // Outer Ring
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, size, 0, 2 * Math.PI);
+                ctx.strokeStyle = isRef ? config.colors.ref : (node.sync_state === 'drifted' ? config.colors.drifted : config.colors.slave);
+                ctx.lineWidth = 3;
+                ctx.fillStyle = '#ffffff';
+                ctx.fill();
+                ctx.stroke();
+
+                // Inner core
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, size - 8, 0, 2 * Math.PI);
+                ctx.fillStyle = isRef ? config.colors.ref : (node.sync_state === 'drifted' ? config.colors.drifted : '#eff6ff');
+                ctx.fill();
+
+                // Text
+                ctx.fillStyle = isRef || node.sync_state === 'drifted' ? '#ffffff' : '#1e293b';
+                ctx.font = 'bold 11px Outfit';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(isRef ? 'LDR' : `#${node.node_id}`, pos.x, pos.y);
+            });
+
+            // Draw Flying timing packets
+            if (simulationState.syncActive && electedRef) {
+                const time = Date.now() / 1000;
+                nodes.forEach((node, idx) => {
+                    if (node.is_elected_ref) return;
+                    const ref = electedRef;
+                    const start = positions[ref.node_id];
+                    const end = positions[node.node_id];
+
+                    // Packet flow animation
+                    const progress = (time * 1.5 + idx * 0.35) % 1.0;
+                    const px = start.x + (end.x - start.x) * progress;
+                    const py = start.y + (end.y - start.y) * progress;
+
+                    ctx.beginPath();
+                    ctx.arc(px, py, 5, 0, 2 * Math.PI);
+                    ctx.fillStyle = config.colors.ref;
+                    ctx.fill();
+                });
+            }
+        }
+
+        // ============ GRAPHS DRAWING ============
+        function updateCharts() {
+            const nodes = Object.values(simulationState.nodes);
+            
+            // 1. Clock graph
+            const clockTraces = nodes.map(node => {
+                return {
+                    y: [node.virtual_time],
+                    name: node.is_elected_ref ? 'Leader (Ref)' : `Node ${node.node_id}`,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    line: {
+                        color: node.is_elected_ref ? config.colors.ref : (node.sync_state === 'drifted' ? config.colors.drifted : config.colors.slave),
+                        width: node.is_elected_ref ? 3 : 2
+                    }
+                };
+            });
+
+            const clockLayout = {
+                xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+                yaxis: { title: 'Clock Time (s)', gridcolor: '#f1f5f9' },
+                plot_bgcolor: '#ffffff',
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                margin: { t: 10, b: 10, l: 40, r: 10 },
+                font: { family: 'Outfit, sans-serif', size: 10, color: '#64748b' },
+                showlegend: false
+            };
+
+            Plotly.react('clock-graph', clockTraces, clockLayout, { responsive: true, displayModeBar: false });
+
+            // 2. Average Error history graph
+            if (simulationState.syncHistory.length > 0) {
+                const times = simulationState.syncHistory.map(d => d[0]);
+                const errors = simulationState.syncHistory.map(d => d[1] * 1000); // ms
+
+                const errorTrace = {
+                    x: times,
+                    y: errors,
+                    type: 'scatter',
+                    mode: 'lines',
+                    fill: 'tozeroy',
+                    fillcolor: 'rgba(59, 130, 246, 0.1)',
+                    line: { color: 'var(--primary)', width: 2 }
+                };
+
+                const errorLayout = {
+                    xaxis: { title: 'Time (s)', gridcolor: '#f1f5f9' },
+                    yaxis: { title: 'Error (ms)', gridcolor: '#f1f5f9' },
+                    plot_bgcolor: '#ffffff',
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    margin: { t: 10, b: 30, l: 40, r: 10 },
+                    font: { family: 'Outfit, sans-serif', size: 10, color: '#64748b' },
+                    showlegend: false
+                };
+
+                Plotly.react('error-graph', [errorTrace], errorLayout, { responsive: true, displayModeBar: false });
+            }
+        }
+
+        window.addEventListener('load', () => {
+            connectWebSocket();
+            
+            // Animation Loop
+            function step() {
+                drawTopology();
+                requestAnimationFrame(step);
+            }
+            requestAnimationFrame(step);
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (ws) ws.close();
+        });
+    </script>
+</body>
+</html>
