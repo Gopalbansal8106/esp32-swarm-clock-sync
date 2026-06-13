@@ -180,7 +180,8 @@ def update_hardware_state(raw: dict):
         "packets_sent": pkt_sent,
         "packets_received": pkt_sent - pkt_lost,
         "latency_estimate": 1.2, # Hardware ESP-NOW ping latency baseline
-        "packet_loss_rate": (pkt_lost / pkt_sent) if pkt_sent > 0 else 0.0
+        "packet_loss_rate": (pkt_lost / pkt_sent) if pkt_sent > 0 else 0.0,
+        "rssi": 0
     }
     
     # Peer Nodes reported by Leader
@@ -189,6 +190,8 @@ def update_hardware_state(raw: dict):
         p_alive = p.get("alive", False)
         p_synced = p.get("synced", False)
         p_offset = p.get("offset", 0)
+        p_drift = p.get("drift", 0.0)
+        p_rssi = p.get("rssi", -127)
 
         temp_nodes[pid] = {
             "node_id": pid,
@@ -196,12 +199,13 @@ def update_hardware_state(raw: dict):
             "is_elected_ref": False,
             "tree_level": 1,
             "offset": p_offset / 1000000.0,
-            "drift_rate": 0.0,
+            "drift_rate": p_drift,
             "sync_state": "synchronized" if p_synced else ("synchronizing" if p_alive else "unsynchronized"),
             "packets_sent": 0,
             "packets_received": 0,
             "latency_estimate": 1.2,
-            "packet_loss_rate": 0.0
+            "packet_loss_rate": 0.0,
+            "rssi": p_rssi
         }
 
     hardware_state["nodes"] = list(temp_nodes.values())

@@ -61,7 +61,7 @@ KalmanClock kalman(KALMAN_Q_OFFSET, KALMAN_Q_DRIFT, KALMAN_R);
 
 // Clock state
 volatile int32_t  clockOffset_us = 0;   // Correction applied to micros()
-float             driftPPM       = 0;
+double            driftPPM       = 0;
 uint32_t          lastSyncTime   = 0;   // millis() of last successful sync
 
 // Two-way timing exchange state
@@ -70,12 +70,15 @@ bool      waitingForResp = false;
 
 // Peer sync tracking
 struct PeerState {
-    bool    alive;
-    bool    synced;
-    int32_t lastOffset_us;
+    bool     alive;
+    bool     synced;
+    int32_t  lastOffset_us;
     uint32_t lastSeenMs;
+    int8_t   rssi;
+    bool     strong; // Hysteresis state
 };
 PeerState peers[NODE_COUNT];
+volatile int8_t rxRssi = -127;
 
 // Statistics
 uint32_t  pktSent = 0;
@@ -168,24 +171,39 @@ void sendPacket(int targetId, SyncPacket& pkt) {
 //  LEADER ELECTION  (lowest node ID that is alive)
 // ─────────────────────────────────────────────────────────
 void electLeader() {
-    int newLeader = myId;
+    int electedLeader = -1;
+
+    // Step 1: Find lowest ID that is alive and has a strong signal to us
     for (int i = 0; i < NODE_COUNT; i++) {
-        if (i < newLeader && peers[i].alive) {
-            newLeader = i;
+        bool candidateAlive = (i == myId) ? true : peers[i].alive;
+        bool candidateStrong = (i == myId) ? true : peers[i].strong;
+        
+        if (candidateAlive && candidateStrong) {
+            electedLeader = i;
+            break; // Lowest ID wins among the strong and alive
         }
     }
-    // Check if I am the minimum
-    bool iAmSmallest = true;
-    for (int i = 0; i < myId; i++) {
-        if (peers[i].alive) { iAmSmallest = false; break; }
+
+    // Step 2: Fall back to lowest ID that is simply alive if no strong signals exist
+    if (electedLeader == -1) {
+        for (int i = 0; i < NODE_COUNT; i++) {
+            bool candidateAlive = (i == myId) ? true : peers[i].alive;
+            if (candidateAlive) {
+                electedLeader = i;
+                break;
+            }
+        }
     }
 
+    if (electedLeader == -1) electedLeader = myId; // Default fallback to self
+
+    int newLeader = electedLeader;
     bool wasLeader = isLeader;
-    isLeader = iAmSmallest;
-    leaderID = isLeader ? myId : newLeader;
+    isLeader = (newLeader == myId);
+    leaderID = newLeader;
 
     if (!wasLeader && isLeader) {
-        Serial.println("[ELECT] I became LEADER");
+        Serial.println("[ELECT] I became LEADER (Strong Signal / Lowest ID)");
         setLed(LED_LEADER);
     } else if (wasLeader && !isLeader) {
         Serial.printf("[ELECT] Lost leadership → Leader is Node %d\n", leaderID);
@@ -205,6 +223,11 @@ void IRAM_ATTR onReceive(const esp_now_recv_info_t* info, const uint8_t* data, i
     rxTimestamp_us = micros();   // Capture T2 immediately
     if (len == sizeof(SyncPacket)) {
         memcpy(&rxPkt, data, sizeof(SyncPacket));
+        if (info && info->rx_ctrl) {
+            rxRssi = info->rx_ctrl->rssi;
+        } else {
+            rxRssi = -127;
+        }
         rxPending = true;
     }
     pktRecv++;
@@ -224,6 +247,14 @@ void processPacket() {
     if (sid >= 0 && sid < NODE_COUNT) {
         peers[sid].alive       = true;
         peers[sid].lastSeenMs  = millis();
+        peers[sid].rssi        = rxRssi;
+        
+        // Hysteresis: Set strong to true if RSSI >= -75, false if RSSI < -82
+        if (rxRssi >= -75) {
+            peers[sid].strong = true;
+        } else if (rxRssi < -82) {
+            peers[sid].strong = false;
+        }
     }
 
     // ── Mode change broadcast ─────────────────────
@@ -291,8 +322,10 @@ void processPacket() {
         uint32_t T3 = rxPkt.t3_us;   // Leader TX time
         uint32_t T4 = rxTimestamp_us; // Our RX time
 
-        // TPSN offset formula: offset = ((T2-T1) - (T4-T3)) / 2
-        int32_t offset_raw = ((int32_t)(T2 - T1) - (int32_t)(T4 - T3)) / 2;
+        // TPSN offset formula: offset = ((T4-T3) - (T2-T1)) / 2
+        // Corrected sign: Since correctedMicros() is (micros() - clockOffset_us),
+        // clockOffset_us must be negative when the slave is behind (T4 - T3 < T2 - T1).
+        int32_t offset_raw = ((int32_t)(T4 - T3) - (int32_t)(T2 - T1)) / 2;
         uint32_t rtt       = (T4 - T1) - (T3 - T2);
 
         // Sanity check: reject if RTT > 100ms (corrupted packet or huge delay)
@@ -302,16 +335,27 @@ void processPacket() {
             return;
         }
 
-        float kalman_offset = kalman.update((float)offset_raw, (float)rtt);
-        clockOffset_us      = (int32_t)kalman_offset;
-        driftPPM            = kalman.driftPPM();
-        lastSyncTime        = millis();
+        // If offset is very large (>100ms, like on boot), perform a hard sync instantly.
+        // Otherwise, filter the measurement using the Kalman clock.
+        if (abs(offset_raw) > 100000) {
+            clockOffset_us = clockOffset_us + offset_raw;
+            kalman.reset();
+            driftPPM = 0.0f;
+            lastSyncTime = millis();
+            peers[sid].lastOffset_us = offset_raw;
+            peers[sid].synced = false;
+        } else {
+            double kalman_offset = kalman.update(offset_raw, rtt);
+            clockOffset_us      = (int32_t)kalman_offset;
+            driftPPM            = kalman.driftPPM();
+            lastSyncTime        = millis();
 
-        peers[sid].lastOffset_us = (int32_t)kalman_offset;
-        peers[sid].synced        = (abs(kalman_offset) < SYNCED_THRESHOLD_US);
+            peers[sid].lastOffset_us = (int32_t)kalman_offset;
+            peers[sid].synced        = (abs(kalman_offset) < SYNCED_THRESHOLD_US);
+        }
 
         Serial.printf("[TPSN] T1=%u T2=%u T3=%u T4=%u | Offset=%d µs | RTT=%u µs | Kalman=%.1f µs | Drift=%.2f PPM\n",
-            T1, T2, T3, T4, offset_raw, rtt, kalman_offset, driftPPM);
+            T1, T2, T3, T4, offset_raw, rtt, (float)clockOffset_us, driftPPM);
         return;
     }
 }
@@ -450,6 +494,8 @@ void printDebug() {
         Serial.print(peers[i].synced ? "true" : "false");
         Serial.print(",\"offset\":");
         Serial.print(peers[i].lastOffset_us);
+        Serial.print(",\"rssi\":");
+        Serial.print(peers[i].rssi);
         Serial.print("}");
     }
     Serial.println("]}");
@@ -469,11 +515,13 @@ void printDebug() {
     Serial.println("───────────────────────────────────────");
     for (int i = 0; i < NODE_COUNT; i++) {
         if (i == myId) continue;
-        Serial.printf("  Peer %d: alive=%s synced=%s offset=%d µs\n",
+        Serial.printf("  Peer %d: alive=%s synced=%s offset=%d µs | RSSI=%d dBm (%s)\n",
             i,
             peers[i].alive  ? "YES" : "NO",
             peers[i].synced ? "YES" : "NO",
-            peers[i].lastOffset_us);
+            peers[i].lastOffset_us,
+            peers[i].rssi,
+            peers[i].strong ? "STRONG" : "WEAK");
     }
     Serial.println("═══════════════════════════════════════\n");
 }
@@ -528,7 +576,14 @@ void setup() {
     }
 
     // Initialize peer state
-    memset(peers, 0, sizeof(peers));
+    for (int i = 0; i < NODE_COUNT; i++) {
+        peers[i].alive = false;
+        peers[i].synced = false;
+        peers[i].lastOffset_us = 0;
+        peers[i].lastSeenMs = 0;
+        peers[i].rssi = -127;
+        peers[i].strong = false;
+    }
 
     // Elect leader (initially just self)
     electLeader();

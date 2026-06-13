@@ -507,6 +507,7 @@
                         <div><span class="node-detail-label">Drift:</span> <span class="node-detail-val">${node.drift_rate.toFixed(1)} PPM</span></div>
                         <div><span class="node-detail-label">Lat Est:</span> <span class="node-detail-val">${node.latency_estimate.toFixed(1)} ms</span></div>
                         <div><span class="node-detail-label">Loss Rate:</span> <span class="node-detail-val">${(node.packet_loss_rate*100).toFixed(1)}%</span></div>
+                        <div><span class="node-detail-label">RSSI:</span> <span class="node-detail-val">${node.is_master ? 'N/A' : (node.rssi + ' dBm')}</span></div>
                     </div>
                 `;
                 container.appendChild(card);
@@ -556,6 +557,24 @@
                     ctx.moveTo(pL.x, pL.y);
                     ctx.lineTo(pN.x, pN.y);
                     ctx.stroke();
+
+                    // Draw RSSI value in the middle of the line
+                    ctx.setLineDash([]);
+                    const midX = (pL.x + pN.x) / 2;
+                    const midY = (pL.y + pN.y) / 2;
+                    ctx.fillStyle = '#64748b';
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    
+                    // Draw a small background badge for readability
+                    const label = `${node.rssi} dBm`;
+                    const textWidth = ctx.measureText(label).width;
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+                    ctx.fillRect(midX - textWidth/2 - 4, midY - 8, textWidth + 8, 16);
+                    
+                    ctx.fillStyle = '#475569';
+                    ctx.fillText(label, midX, midY);
                 });
             }
 
