@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────
 // Which node number is THIS board? (0 = leader candidate)
 // You set this per-board before flashing. Node 0 has the OLED.
-#define THIS_NODE_ID   0   // ← Change per board: 0, 1, 2, 3, or 4
+#define THIS_NODE_ID   2   // ← Change per board: 0, 1, 2, 3, or 4
 
 // MAC addresses of all 5 sync nodes (filled from physical nodes telemetry)
 // Node 0: 30:AE:A4:8C:1B:D4
@@ -19,13 +19,12 @@
 // Node 2: 30:AE:A4:8B:3B:A8
 // Node 3: 14:33:5C:02:28:10
 // Node 4: 14:2B:2F:C8:E1:C8
-#define NODE_COUNT  5
+#define NODE_COUNT  4
 const uint8_t NODE_MACS[NODE_COUNT][6] = {
     {0x30, 0xAE, 0xA4, 0x8C, 0x1B, 0xD4},  // Node 0 (Leader Display)
     {0x68, 0x25, 0xDD, 0x30, 0x05, 0x50},  // Node 1
     {0x30, 0xAE, 0xA4, 0x8B, 0x3B, 0xA8},  // Node 2
-    {0x14, 0x33, 0x5C, 0x02, 0x28, 0x10},  // Node 3
-    {0x14, 0x2B, 0x2F, 0xC8, 0xE1, 0xC8}   // Node 4
+    {0x14, 0x33, 0x5C, 0x02, 0x28, 0x10}   // Node 3
 };
 
 // ─────────────────────────────────────────────
@@ -76,10 +75,11 @@ const uint8_t NODE_MACS[NODE_COUNT][6] = {
 #define DEBUG_INTERVAL_MS  500    // Print debug line every 500ms
 
 // ─────────────────────────────────────────────
-//  SYNC MODES
+//  SYNC MODES & WIFI
 // ─────────────────────────────────────────────
 #define MODE_BASIC_ONE_WAY   0
 #define MODE_ESPNOW_TWO_WAY  1
+#define WIFI_CHANNEL         13   // Set to 13 to avoid 2.4GHz home router interference
 
 // ─────────────────────────────────────────────
 //  PACKET TYPES

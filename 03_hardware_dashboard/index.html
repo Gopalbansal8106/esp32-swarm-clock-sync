@@ -3,45 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Hardware Clock Sync Monitor</title>
+    <title>ESP32 Swarm Telemetry Terminal</title>
     
-    <!-- Outfit Font -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- Plotly & GSAP -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
     
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
         :root {
-            --bg-main: #f8fafc;
+            --bg-main: #f0f2f5;
             --bg-card: #ffffff;
-            --primary: #8b5cf6;
-            --primary-light: #f5f3ff;
-            --primary-dim: #7c3aed;
+            --border: #e2e8f0;
+            --primary: #2563eb;
+            --accent: #6366f1;
             --success: #10b981;
-            --success-light: #ecfdf5;
-            --error: #ef4444;
-            --error-light: #fef2f2;
             --warning: #f59e0b;
-            --warning-light: #fffbeb;
+            --danger: #ef4444;
             --text-main: #0f172a;
             --text-muted: #64748b;
-            --border: #e2e8f0;
-            --radius: 20px;
-            --shadow: 0 10px 15px -3px rgba(0,0,0,0.02), 0 4px 6px -4px rgba(0,0,0,0.02);
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
         }
 
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: 'Outfit', sans-serif;
+            font-family: 'Inter', sans-serif;
             background-color: var(--bg-main);
             color: var(--text-main);
             height: 100vh;
@@ -50,411 +35,242 @@
             flex-direction: column;
         }
 
-        /* NAVBAR */
         .navbar {
             background-color: var(--bg-card);
             border-bottom: 1px solid var(--border);
-            padding: 18px 32px;
+            padding: 12px 24px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);
-            z-index: 100;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            z-index: 10;
         }
 
-        .nav-logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .nav-title h1 { font-size: 18px; font-weight: 700; color: var(--text-main); letter-spacing: -0.5px; }
+        .nav-title p { font-size: 12px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
 
-        .nav-logo-icon {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dim) 100%);
-            color: white;
-            width: 44px;
-            height: 44px;
-            border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            box-shadow: 0 4px 14px rgba(139, 92, 246, 0.25);
-        }
+        .nav-controls { display: flex; gap: 12px; align-items: center; }
+        .badge { padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; border: 1px solid var(--border); }
+        .badge.mode { color: var(--primary); background: #eff6ff; border-color: #bfdbfe; }
+        .badge.live { color: var(--success); background: #ecfdf5; border-color: #a7f3d0; display: flex; align-items: center; gap: 6px; }
+        .live-dot { width: 8px; height: 8px; background: var(--success); border-radius: 50%; box-shadow: 0 0 6px var(--success); }
 
-        .nav-title h1 {
-            font-size: 20px;
-            font-weight: 800;
-            color: var(--text-main);
-            letter-spacing: -0.5px;
-        }
-
-        .nav-title p {
-            font-size: 12px;
-            color: var(--text-muted);
-            font-weight: 600;
-        }
-
-        .nav-controls {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .mode-badge {
-            font-size: 13px;
-            font-weight: 800;
-            padding: 8px 16px;
-            border-radius: 30px;
-            background-color: var(--primary-light);
-            color: var(--primary-dim);
-            border: 1px solid rgba(139, 92, 246, 0.15);
-        }
-
-        .status-badge {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background-color: var(--success-light);
-            color: var(--success);
-            padding: 8px 16px;
-            border-radius: 30px;
-            font-size: 13px;
-            font-weight: 800;
-            border: 1px solid rgba(16, 185, 129, 0.15);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            background-color: var(--success);
-            border-radius: 50%;
-            animation: pulse 1.5s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.4); opacity: 0.5; }
-        }
-
-        /* GRID CONTAINER */
         .dashboard-container {
             flex: 1;
             display: grid;
-            grid-template-columns: 1fr 410px;
-            gap: 24px;
-            padding: 24px;
-            overflow: hidden;
-            min-height: 0;
-        }
-
-        .main-content {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        /* METRICS */
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: 300px 1fr 340px;
             gap: 16px;
-        }
-
-        .metric-card {
-            background-color: var(--bg-card);
-            border-radius: 16px;
-            border: 1px solid var(--border);
-            padding: 20px;
-            box-shadow: var(--shadow);
-            transition: all 0.3s ease;
-            position: relative;
+            padding: 16px;
             overflow: hidden;
         }
 
-        .metric-card::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            height: 4px;
-            background: var(--border);
-        }
-
-        .metric-card.accent::after {
-            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-dim) 100%);
-        }
-
-        .metric-card.success::after {
-            background: var(--success);
-        }
-
-        .metric-label {
-            font-size: 11px;
-            font-weight: 800;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 6px;
-        }
-
-        .metric-value {
-            font-size: 24px;
-            font-weight: 800;
-            color: var(--text-main);
-        }
-
-        /* PANEL */
         .panel {
-            background-color: var(--bg-card);
-            border-radius: var(--radius);
+            background: var(--bg-card);
             border: 1px solid var(--border);
-            box-shadow: var(--shadow);
+            border-radius: 8px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            min-height: 0;
+            box-shadow: var(--shadow);
         }
 
         .panel-header {
-            padding: 20px 24px;
+            padding: 12px 16px;
             border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background-color: #fafbfc;
-        }
-
-        .panel-title {
-            font-size: 14px;
-            font-weight: 800;
-            color: var(--text-main);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .panel-body {
-            flex: 1;
-            padding: 24px;
-            min-height: 0;
-            overflow-y: auto;
-        }
-
-        .topology-panel {
-            flex: 1;
-            min-height: 0;
-        }
-
-        .canvas-container {
-            width: 100%;
-            height: 100%;
-            position: relative;
-            background-color: #fafbfc;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        #topology-canvas {
-            width: 100%;
-            height: 100%;
-            display: block;
-        }
-
-        /* RIGHT PANEL */
-        .sidebar-right {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .chart-wrapper {
-            height: 190px;
-            border-radius: 8px;
-            background-color: var(--bg-card);
-        }
-
-        .node-list-panel {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .node-cards-container {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .node-card {
-            background-color: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 16px;
-            transition: all 0.2s ease;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .node-card.ref {
-            border-color: var(--success);
-            background-color: var(--success-light);
-        }
-
-        .node-card.unstable {
-            border-color: var(--error);
-            background-color: var(--error-light);
-        }
-
-        .node-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .node-name {
-            font-size: 14px;
-            font-weight: 800;
-        }
-
-        .node-badge {
-            font-size: 10px;
-            font-weight: 800;
-            text-transform: uppercase;
-            padding: 4px 10px;
-            border-radius: 20px;
-            background-color: var(--border);
-            color: var(--text-muted);
-        }
-
-        .node-badge.leader {
-            background-color: var(--success);
-            color: white;
-        }
-
-        .node-badge.synced {
-            background-color: var(--primary);
-            color: white;
-        }
-
-        .node-badge.offline {
-            background-color: var(--text-muted);
-            color: white;
-        }
-
-        .node-details {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 6px;
             font-size: 12px;
-        }
-
-        .node-detail-label {
-            color: var(--text-muted);
-            font-weight: 600;
-        }
-
-        .node-detail-val {
             font-weight: 700;
             color: var(--text-main);
+            background: #f8fafc;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
+
+        /* LEFT SIDEBAR */
+        .sidebar-left { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+        .topology-panel { height: 260px; }
+        .topology-body { flex: 1; position: relative; }
+        #topology-canvas { width: 100%; height: 100%; display: block; }
+
+        .terminal-panel { flex: 1; min-height: 0; }
+        .terminal-body {
+            flex: 1;
+            background: #0f172a;
+            color: #10b981;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 12px;
+            overflow-y: auto;
+            line-height: 1.4;
+        }
+        .term-line { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 2px 0; }
+        .term-ts { color: #64748b; margin-right: 8px; }
+
+        /* MAIN CONTENT */
+        .main-content { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+
+        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-shadow: var(--shadow);
+            position: relative;
+            overflow: hidden;
+        }
+        .metric-card::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--primary); }
+        .metric-card.success::after { background: var(--success); }
+        .metric-card.warning::after { background: var(--warning); }
+        
+        .metric-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-value { font-size: 22px; font-weight: 800; color: var(--text-main); font-family: 'JetBrains Mono', monospace; }
+
+        .chart-panel { flex: 1; min-height: 0; }
+        .chart-wrapper { width: 100%; height: 100%; }
+
+        .hist-panel { height: 220px; }
+
+        /* RIGHT SIDEBAR */
+        .sidebar-right { display: flex; flex-direction: column; min-height: 0; }
+        .node-list-panel { flex: 1; min-height: 0; }
+        .node-list-body { padding: 12px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+
+        .node-card {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .node-header { display: flex; justify-content: space-between; align-items: center; }
+        .node-name { font-size: 13px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px; }
+        
+        /* Status LED */
+        .led { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .led.green { background-color: var(--success); box-shadow: 0 0 6px var(--success); }
+        .led.red { background-color: var(--danger); box-shadow: 0 0 6px var(--danger); }
+        .led.gray { background-color: var(--text-muted); }
+
+        .node-status { font-size: 10px; padding: 3px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase; }
+        .node-status.leader { background: var(--success); color: white; }
+        .node-status.synced { background: var(--primary); color: white; }
+        .node-status.drifting { background: var(--danger); color: white; }
+        
+        /* Layout for details and gauge */
+        .node-content { display: flex; gap: 10px; align-items: center; }
+        .node-details { flex: 1; display: grid; grid-template-columns: 1fr; gap: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted); }
+        .node-details span.val { color: var(--text-main); font-weight: 700; }
+
+        /* CSS Gauge */
+        .gauge-container {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            background: conic-gradient(var(--accent) var(--gauge-deg), #e2e8f0 0deg);
+        }
+        .gauge-inner {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        .gauge-val { font-size: 10px; font-weight: 800; color: var(--text-main); font-family: 'JetBrains Mono', monospace; }
+        .gauge-lbl { font-size: 7px; color: var(--text-muted); font-weight: 700; }
+
     </style>
 </head>
 <body>
     <div class="navbar">
-        <div class="nav-logo">
-            <div class="nav-logo-icon">📡</div>
-            <div class="nav-title">
-                <h1>ESP32 Swarm Clock Sync Monitor</h1>
-                <p>Real-Time Hardware Telemetry Console (Node 0 Bridge)</p>
-            </div>
+        <div class="nav-title">
+            <h1>Swarm Telemetry Console</h1>
+            <p>> BRIDGE: NODE_0 | PORT: ACTIVE</p>
         </div>
-        
         <div class="nav-controls">
-            <div class="mode-badge" id="sync-mode-badge">Mode: Basic One-Way</div>
-            <div class="status-badge">
-                <span class="status-dot"></span>
-                <span>Serial Stream Active</span>
-            </div>
+            <div class="badge mode" id="sync-mode-badge">MODE: NULL</div>
+            <div class="badge live"><div class="live-dot"></div> DATA STREAM</div>
         </div>
     </div>
 
     <div class="dashboard-container">
+        
+        <!-- LEFT: Topology & Terminal -->
+        <div class="sidebar-left">
+            <div class="panel topology-panel">
+                <div class="panel-header">RF Topology Network</div>
+                <div class="topology-body">
+                    <canvas id="topology-canvas"></canvas>
+                </div>
+            </div>
+            <div class="panel terminal-panel">
+                <div class="panel-header">
+                    <span>Live Telemetry Socket</span>
+                    <span style="font-size: 9px; color: var(--text-muted);">RAW JSON</span>
+                </div>
+                <div class="terminal-body" id="raw-terminal"></div>
+            </div>
+        </div>
+
+        <!-- CENTER: Metrics, Oscilloscope, Histogram -->
         <div class="main-content">
             <div class="metrics-grid">
-                <div class="metric-card accent">
-                    <span class="metric-label">Online Nodes</span>
-                    <span id="metric-nodes" class="metric-value">0</span>
-                </div>
-                <div class="metric-card accent">
-                    <span class="metric-label">Active Leader</span>
-                    <span id="metric-leader" class="metric-value">Node -</span>
-                </div>
-                <div class="metric-card accent">
-                    <span class="metric-label">Average Offset</span>
-                    <span id="metric-error" class="metric-value" style="color: var(--primary-dim);">0.00 ms</span>
+                <div class="metric-card">
+                    <span class="metric-label">UAV Nodes Active</span>
+                    <span class="metric-value" id="metric-nodes">0</span>
                 </div>
                 <div class="metric-card success">
-                    <span class="metric-label">Swarm Uptime</span>
-                    <span id="metric-uptime" class="metric-value">0.0s</span>
+                    <span class="metric-label">Swarm Leader</span>
+                    <span class="metric-value" id="metric-leader">N/A</span>
+                </div>
+                <div class="metric-card warning">
+                    <span class="metric-label">Global Error (Avg)</span>
+                    <span class="metric-value" id="metric-error">0.00 ms</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Flight Uptime</span>
+                    <span class="metric-value" id="metric-uptime">0.0s</span>
                 </div>
             </div>
 
-            <div class="panel topology-panel">
-                <div class="panel-header">
-                    <div class="panel-title">Physical Topology & Signal Strength</div>
-                </div>
-                <div class="panel-body" style="padding: 0;">
-                    <div class="canvas-container">
-                        <canvas id="topology-canvas"></canvas>
-                    </div>
-                </div>
+            <div class="panel chart-panel">
+                <div class="panel-header">Clock Offset Oscilloscope</div>
+                <div class="chart-wrapper" id="offset-chart"></div>
+            </div>
+
+            <div class="panel hist-panel">
+                <div class="panel-header">Error Distribution (Histogram)</div>
+                <div class="chart-wrapper" id="hist-chart"></div>
             </div>
         </div>
 
+        <!-- RIGHT: UAV Matrix -->
         <div class="sidebar-right">
-            <div class="panel" style="height: 250px;">
-                <div class="panel-header">
-                    <div class="panel-title">Offset Tracking (Plotly)</div>
-                </div>
-                <div class="panel-body" style="padding: 12px; overflow: hidden;">
-                    <div class="chart-wrapper" id="offset-chart"></div>
-                </div>
-            </div>
-
             <div class="panel node-list-panel">
-                <div class="panel-header">
-                    <div class="panel-title">Physical Nodes Monitor</div>
-                </div>
-                <div class="panel-body">
-                    <div class="node-cards-container" id="nodes-container"></div>
-                </div>
+                <div class="panel-header">UAV Fleet Matrix</div>
+                <div class="node-list-body" id="nodes-container"></div>
             </div>
         </div>
+
     </div>
 
     <script>
-        let state = {
-            nodes: [],
-            sync_mode: 'basic',
-            total_packets_sent: 0,
-            total_packets_lost: 0,
-            avg_sync_error: 0.0,
-            sync_history: [],
-            global_time: 0.0,
-            sync_active: true
-        };
-
-        const colors = {
-            ref: '#10b981',
-            slave: '#8b5cf6',
-            offline: '#64748b'
-        };
+        let state = { nodes: [], sync_mode: 'basic', avg_sync_error: 0.0, sync_history: [], global_time: 0.0 };
+        const colors = { ref: '#10b981', slave: '#2563eb' };
+        const termMaxLines = 30;
 
         let ws = null;
         function connect() {
@@ -462,52 +278,67 @@
             ws = new WebSocket(`${proto}//${window.location.host}/ws`);
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
-                if (msg.type === 'state') {
-                    state = msg.data;
-                    updateUI();
+                if (msg.type === 'state') { 
+                    state = msg.data; 
+                    updateUI(); 
+                    logTerminal(msg.data);
                 }
             };
             ws.onclose = () => setTimeout(connect, 2000);
         }
 
+        function logTerminal(data) {
+            const term = document.getElementById('raw-terminal');
+            if(!term) return;
+            
+            // Format a clean mini-packet to show
+            const raw = `{"t":${data.global_time.toFixed(1)}, "nodes":${data.nodes.length}, "err":${data.avg_sync_error.toFixed(4)}}`;
+            
+            const line = document.createElement('div');
+            line.className = 'term-line';
+            
+            const d = new Date();
+            const ts = `${d.getHours()}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}.${d.getMilliseconds().toString().padStart(3,'0')}`;
+            
+            line.innerHTML = `<span class="term-ts">[${ts}]</span>${raw}`;
+            term.appendChild(line);
+            
+            while(term.childNodes.length > termMaxLines) {
+                term.removeChild(term.firstChild);
+            }
+            term.scrollTop = term.scrollHeight;
+        }
+
         function updateUI() {
-            // Header stats
-            document.getElementById('sync-mode-badge').textContent = `Mode: ${state.sync_mode === 'basic' ? 'Basic One-Way' : 'ESP-NOW Two-Way'}`;
+            document.getElementById('sync-mode-badge').textContent = `MODE: ${state.sync_mode === 'basic' ? 'One-Way Broadcast' : 'Two-Way EKF'}`;
             document.getElementById('metric-nodes').textContent = state.nodes.length;
             document.getElementById('metric-uptime').textContent = `${state.global_time}s`;
 
-            // Active Leader detection
             const leader = state.nodes.find(n => n.is_elected_ref);
-            document.getElementById('metric-leader').textContent = leader ? `Node #${leader.node_id}` : 'None';
+            document.getElementById('metric-leader').textContent = leader ? `UAV-${leader.node_id}` : 'None';
+            document.getElementById('metric-error').textContent = `${(state.avg_sync_error * 1000).toFixed(2)} ms`;
 
-            // Sync error display
-            const errVal = state.avg_sync_error * 1000; // to milliseconds
-            document.getElementById('metric-error').textContent = `${errVal.toFixed(2)} ms`;
-
-            // Draw Cards
             const container = document.getElementById('nodes-container');
             container.innerHTML = '';
             
-            // Sort by Node ID
-            const sortedNodes = [...state.nodes].sort((a,b) => a.node_id - b.node_id);
-            sortedNodes.forEach(node => {
+            [...state.nodes].sort((a,b) => a.node_id - b.node_id).forEach(node => {
                 const card = document.createElement('div');
-                card.className = `node-card ${node.is_elected_ref ? 'ref' : ''} ${node.sync_state === 'unsynchronized' ? 'unstable' : ''}`;
+                card.className = `node-card`;
                 
-                const badgeClass = node.is_elected_ref ? 'leader' : (node.sync_state === 'synchronized' ? 'synced' : 'offline');
-                const badgeText = node.is_elected_ref ? 'Leader' : (node.sync_state === 'synchronized' ? 'Synced' : 'Syncing');
+                const status = node.is_elected_ref ? 'Leader' : (node.sync_state === 'synchronized' ? 'Synced' : 'Drifting');
+                const sClass = node.is_elected_ref ? 'leader' : (node.sync_state === 'synchronized' ? 'synced' : 'drifting');
+                const ledClass = node.is_elected_ref ? 'green' : (node.sync_state === 'synchronized' ? 'green' : 'red');
 
                 card.innerHTML = `
                     <div class="node-header">
-                        <span class="node-name">ESP32 Node #${node.node_id}</span>
-                        <span class="node-badge ${badgeClass}">${badgeText}</span>
+                        <span class="node-name"><div class="led ${ledClass}"></div> UAV-${node.node_id}</span>
+                        <span class="node-status ${sClass}">${status}</span>
                     </div>
-                    <div class="node-details">
-                        <div><span class="node-detail-label">Offset:</span> <span class="node-detail-val">${(node.offset*1000000).toFixed(1)} us</span></div>
-                        <div><span class="node-detail-label">Drift:</span> <span class="node-detail-val">${node.drift_rate.toFixed(1)} PPM</span></div>
-                        <div><span class="node-detail-label">Lat Est:</span> <span class="node-detail-val">${node.latency_estimate.toFixed(1)} ms</span></div>
-                        <div><span class="node-detail-label">Loss Rate:</span> <span class="node-detail-val">${(node.packet_loss_rate*100).toFixed(1)}%</span></div>
-                        <div><span class="node-detail-label">RSSI:</span> <span class="node-detail-val">${node.is_master ? 'N/A' : (node.rssi + ' dBm')}</span></div>
+                    <div class="node-content">
+                        <div class="node-details">
+                            <div>ERR: <span class="val">${(node.offset*1000000).toFixed(1)} us</span></div>
+                            <div>SIG: <span class="val">${node.is_master ? '---' : node.rssi} dBm</span></div>
+                        </div>
                     </div>
                 `;
                 container.appendChild(card);
@@ -521,116 +352,109 @@
             const canvas = document.getElementById('topology-canvas');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
-            
             canvas.width = canvas.parentElement.clientWidth;
             canvas.height = canvas.parentElement.clientHeight;
-
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             const nodes = state.nodes;
             if (nodes.length === 0) return;
 
-            const centerX = canvas.width / 2;
-            const centerY = canvas.height / 2;
-            const radius = Math.min(canvas.width, canvas.height) / 2 - 50;
+            const cx = canvas.width / 2, cy = canvas.height / 2;
+            const r = Math.min(canvas.width, canvas.height) / 2 - 30;
 
-            const positions = {};
-            nodes.forEach((node, idx) => {
-                const angle = (idx * 2 * Math.PI) / nodes.length - Math.PI / 2;
-                positions[node.node_id] = {
-                    x: centerX + radius * Math.cos(angle),
-                    y: centerY + radius * Math.sin(angle)
-                };
+            const pos = {};
+            nodes.forEach((n, i) => {
+                const a = (i * 2 * Math.PI) / nodes.length - Math.PI / 2;
+                pos[n.node_id] = { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
             });
 
-            // Draw link lines
             const leader = nodes.find(n => n.is_elected_ref);
             if (leader) {
-                const pL = positions[leader.node_id];
-                nodes.forEach(node => {
-                    if (node.node_id === leader.node_id) return;
-                    const pN = positions[node.node_id];
-                    ctx.strokeStyle = node.sync_state === 'synchronized' ? '#10b981' : '#cbd5e1';
+                const pL = pos[leader.node_id];
+                nodes.forEach(n => {
+                    if (n.node_id === leader.node_id) return;
+                    const pN = pos[n.node_id];
+                    ctx.strokeStyle = n.sync_state === 'synchronized' ? '#10b981' : '#cbd5e1';
                     ctx.lineWidth = 2;
                     ctx.setLineDash([5, 5]);
-                    ctx.beginPath();
-                    ctx.moveTo(pL.x, pL.y);
-                    ctx.lineTo(pN.x, pN.y);
-                    ctx.stroke();
-
-                    // Draw RSSI value in the middle of the line
+                    ctx.beginPath(); ctx.moveTo(pL.x, pL.y); ctx.lineTo(pN.x, pN.y); ctx.stroke();
+                    
                     ctx.setLineDash([]);
                     const midX = (pL.x + pN.x) / 2;
                     const midY = (pL.y + pN.y) / 2;
-                    ctx.fillStyle = '#64748b';
-                    ctx.font = 'bold 10px sans-serif';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    
-                    // Draw a small background badge for readability
-                    const label = `${node.rssi} dBm`;
-                    const textWidth = ctx.measureText(label).width;
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-                    ctx.fillRect(midX - textWidth/2 - 4, midY - 8, textWidth + 8, 16);
-                    
-                    ctx.fillStyle = '#475569';
-                    ctx.fillText(label, midX, midY);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.fillRect(midX - 15, midY - 8, 30, 16);
+                    ctx.fillStyle = '#64748b'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText(`${n.rssi}`, midX, midY);
                 });
             }
 
-            // Draw nodes
-            ctx.setLineDash([]);
-            nodes.forEach(node => {
-                const pos = positions[node.node_id];
-                ctx.fillStyle = node.is_elected_ref ? colors.ref : colors.slave;
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, node.is_elected_ref ? 22 : 18, 0, 2 * Math.PI);
-                ctx.fill();
-
-                // Text
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 12px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(`#${node.node_id}`, pos.x, pos.y);
+            nodes.forEach(n => {
+                const p = pos[n.node_id];
+                ctx.fillStyle = n.is_elected_ref ? colors.ref : colors.slave;
+                ctx.beginPath(); ctx.arc(p.x, p.y, 14, 0, 2 * Math.PI); ctx.fill();
+                ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText(n.node_id, p.x, p.y);
             });
         }
 
-        let chartInitialized = false;
+        let chartInit = false;
         function drawChart() {
-            const chartDiv = document.getElementById('offset-chart');
-            if (!chartDiv) return;
+            if (!document.getElementById('offset-chart')) return;
+            
+            const x = state.sync_history.map(p => p[0]);
+            const y = state.sync_history.map(p => p[1] * 1000); // ms
 
-            const x = state.sync_history.map(pt => pt[0]);
-            const y = state.sync_history.map(pt => pt[1] * 1000); // to milliseconds
-
-            const data = [{
-                x: x,
-                y: y,
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#8b5cf6', width: 3 },
-                fill: 'tozeroy',
-                fillcolor: 'rgba(139,92,246,0.1)'
+            // Oscilloscope
+            const dataLine = [{
+                x: x, y: y,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#2563eb', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(37, 99, 235, 0.1)'
             }];
 
-            const layout = {
-                margin: { t: 10, r: 10, b: 30, l: 50 },
-                xaxis: { title: 'Time (s)', showgrid: false },
-                yaxis: { title: 'Avg Error (ms)', showgrid: true, gridcolor: '#f1f5f9' },
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: 'rgba(0,0,0,0)'
+            const layoutLine = {
+                margin: { t: 10, r: 10, b: 30, l: 40 },
+                xaxis: { title: 'Time (s)', color: '#64748b', gridcolor: '#f1f5f9' },
+                yaxis: { title: 'Offset (ms)', color: '#64748b', gridcolor: '#f1f5f9' },
+                paper_bgcolor: 'transparent', plot_bgcolor: 'transparent'
             };
 
-            if (!chartInitialized) {
-                Plotly.newPlot('offset-chart', data, layout, { displayModeBar: false });
-                chartInitialized = true;
-            } else {
-                Plotly.react('offset-chart', data, layout, { displayModeBar: false });
+            // Histogram
+            const dataHist = [{
+                x: y,
+                type: 'histogram',
+                marker: { color: '#6366f1' },
+                opacity: 0.7,
+                xbins: { size: 0.5 }
+            }];
+
+            const layoutHist = {
+                margin: { t: 10, r: 10, b: 30, l: 40 },
+                xaxis: { title: 'Error Range (ms)', color: '#64748b', gridcolor: '#f1f5f9' },
+                yaxis: { title: 'Frequency', color: '#64748b', gridcolor: '#f1f5f9' },
+                paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+                bargap: 0.1
+            };
+
+            if (!chartInit) { 
+                Plotly.newPlot('offset-chart', dataLine, layoutLine, { displayModeBar: false, responsive: true }); 
+                Plotly.newPlot('hist-chart', dataHist, layoutHist, { displayModeBar: false, responsive: true }); 
+                chartInit = true; 
+            } else { 
+                Plotly.react('offset-chart', dataLine, layoutLine); 
+                Plotly.react('hist-chart', dataHist, layoutHist); 
             }
         }
 
         window.onload = connect;
+        window.addEventListener('resize', () => { 
+            drawTopology(); 
+            if(chartInit) {
+                Plotly.Plots.resize('offset-chart');
+                Plotly.Plots.resize('hist-chart');
+            }
+        });
     </script>
 </body>
 </html>

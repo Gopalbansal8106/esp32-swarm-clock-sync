@@ -4,7 +4,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define THIS_NODE_ID   1   // ← Change per board: 0, 1, 2, or 3
+#define THIS_NODE_ID   0   // ← Change per board: 0, 1, 2, or 3
 
 #define NODE_COUNT  4
 const uint8_t NODE_MACS[NODE_COUNT][6] = {

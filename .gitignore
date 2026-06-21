@@ -9,3 +9,7 @@ venv/
 env/
 01_simulation_dashboard/venv/
 03_hardware_dashboard/venv/
+03_hardware_dashboard/logs/
+03_hardware_dashboard/logs_archive/
+03_hardware_dashboard/logs_archive_experiment1/
+*.csv

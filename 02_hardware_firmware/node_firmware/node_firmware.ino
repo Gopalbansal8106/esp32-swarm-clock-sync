@@ -18,6 +18,7 @@
 #include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <Preferences.h>
 #include "config.h"
 #include "kalman.h"
@@ -168,46 +169,50 @@ void sendPacket(int targetId, SyncPacket& pkt) {
 }
 
 // ─────────────────────────────────────────────────────────
-//  LEADER ELECTION  (lowest node ID that is alive)
+//  LEADER ELECTION  (Node 0 strictly acts as RSSI Arbitrator)
 // ─────────────────────────────────────────────────────────
 void electLeader() {
-    int electedLeader = -1;
+    if (myId != 0) return; // ONLY Node 0 monitors RSSI and decides the leader!
 
-    // Step 1: Find lowest ID that is alive and has a strong signal to us
-    for (int i = 0; i < NODE_COUNT; i++) {
-        bool candidateAlive = (i == myId) ? true : peers[i].alive;
-        bool candidateStrong = (i == myId) ? true : peers[i].strong;
+    int bestNode = -1;
+    int bestRssi = -999;
+
+    // Step 1: Find the node with the strongest signal (excluding Node 0, which is just the bridge)
+    for (int i = 1; i < NODE_COUNT; i++) {
+        if (!peers[i].alive) continue; // Skip dead nodes
         
-        if (candidateAlive && candidateStrong) {
-            electedLeader = i;
-            break; // Lowest ID wins among the strong and alive
+        if (peers[i].rssi > bestRssi) {
+            bestRssi = peers[i].rssi;
+            bestNode = i;
         }
     }
 
-    // Step 2: Fall back to lowest ID that is simply alive if no strong signals exist
-    if (electedLeader == -1) {
-        for (int i = 0; i < NODE_COUNT; i++) {
-            bool candidateAlive = (i == myId) ? true : peers[i].alive;
-            if (candidateAlive) {
-                electedLeader = i;
-                break;
-            }
-        }
+    if (bestNode == -1) {
+        bestNode = 0; // Fallback to self only if everyone is dead
+        bestRssi = 0;
     }
 
-    if (electedLeader == -1) electedLeader = myId; // Default fallback to self
+    int currentLeaderRssi = (leaderID == 0) ? -999 : peers[leaderID].rssi;
+    bool currentLeaderDead = (leaderID != 0 && !peers[leaderID].alive);
 
-    int newLeader = electedLeader;
-    bool wasLeader = isLeader;
-    isLeader = (newLeader == myId);
-    leaderID = newLeader;
+    // Step 2: Switch leaders if the current leader died, OR if someone beats them by > 10 dBm (Hysteresis)
+    if (bestNode != leaderID) {
+        if (leaderID == 0 || currentLeaderDead || (bestRssi > currentLeaderRssi + 10)) {
+            Serial.printf("[ELECT] Node 0 elected Node %d as new Leader! (RSSI %d beats %d)\n", bestNode, bestRssi, currentLeaderRssi);
+            
+            leaderID = bestNode;
+            isLeader = (myId == leaderID);
+            
+            if (isLeader) setLed(LED_LEADER);
+            else setLed(LED_SYNCING);
 
-    if (!wasLeader && isLeader) {
-        Serial.println("[ELECT] I became LEADER (Strong Signal / Lowest ID)");
-        setLed(LED_LEADER);
-    } else if (wasLeader && !isLeader) {
-        Serial.printf("[ELECT] Lost leadership → Leader is Node %d\n", leaderID);
-        setLed(LED_SYNCING);
+            // Broadcast new leader to the swarm
+            SyncPacket pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            pkt.pkt_type   = PKT_LEADER_ELECT;
+            pkt.tree_level = leaderID; // Use tree_level to pass the elected ID
+            sendPacket(-1, pkt);
+        }
     }
 }
 
@@ -215,18 +220,21 @@ void electLeader() {
 //  ESP-NOW RECEIVE CALLBACK
 //  !! Runs in WiFi task context — keep short !!
 // ─────────────────────────────────────────────────────────
-uint32_t rxTimestamp_us = 0;  // Captured precisely on arrival
-SyncPacket rxPkt;
+uint32_t isr_rxTimestamp_us = 0;  // Captured precisely on arrival
+SyncPacket isr_rxPkt;
+volatile int8_t isr_rxRssi = -127;
 volatile bool rxPending = false;
 
 void IRAM_ATTR onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
-    rxTimestamp_us = micros();   // Capture T2 immediately
+    if (rxPending) return; // Drop packet to prevent race condition corruption!
+
+    isr_rxTimestamp_us = micros();   // Capture T2 immediately
     if (len == sizeof(SyncPacket)) {
-        memcpy(&rxPkt, data, sizeof(SyncPacket));
+        memcpy((void*)&isr_rxPkt, data, sizeof(SyncPacket));
         if (info && info->rx_ctrl) {
-            rxRssi = info->rx_ctrl->rssi;
+            isr_rxRssi = info->rx_ctrl->rssi;
         } else {
-            rxRssi = -127;
+            isr_rxRssi = -127;
         }
         rxPending = true;
     }
@@ -238,7 +246,14 @@ void IRAM_ATTR onReceive(const esp_now_recv_info_t* info, const uint8_t* data, i
 // ─────────────────────────────────────────────────────────
 void processPacket() {
     if (!rxPending) return;
-    rxPending = false;
+    
+    // Safely copy ISR variables to local scope to prevent race conditions
+    uint32_t rxTimestamp_us = isr_rxTimestamp_us;
+    SyncPacket rxPkt;
+    memcpy(&rxPkt, (void*)&isr_rxPkt, sizeof(SyncPacket));
+    int8_t rxRssi = isr_rxRssi;
+    
+    rxPending = false; // Free the ISR to receive the next packet
 
     int sid    = rxPkt.sender_id;
     uint8_t pt = rxPkt.pkt_type;
@@ -255,6 +270,13 @@ void processPacket() {
         } else if (rxRssi < -82) {
             peers[sid].strong = false;
         }
+        
+        // In Two-Way mode, the slave reports its offset in the SYNC_REQ
+        // Node 0 explicitly reads this to populate the Dashboard!
+        if ((isLeader || myId == 0) && pt == PKT_SYNC_REQ) {
+            peers[sid].lastOffset_us = rxPkt.offset_us;
+            peers[sid].synced = (abs(rxPkt.offset_us) < SYNCED_THRESHOLD_US);
+        }
     }
 
     // ── Mode change broadcast ─────────────────────
@@ -270,24 +292,40 @@ void processPacket() {
 
     // ── Leader election announcement ──────────────
     if (pt == PKT_LEADER_ELECT) {
-        leaderID = sid;
-        if (sid < myId) { isLeader = false; setLed(LED_SYNCING); }
+        leaderID = rxPkt.tree_level;
+        if (leaderID == myId) {
+            if (!isLeader) {
+                isLeader = true;
+                setLed(LED_LEADER);
+                Serial.println("[ELECT] I was elected LEADER by Node 0");
+            }
+        } else {
+            if (isLeader) {
+                isLeader = false;
+                setLed(LED_SYNCING);
+                Serial.printf("[ELECT] Lost leadership! Node 0 elected Node %d\n", leaderID);
+            } else if (leaderID != leaderID) { // Update variable
+                Serial.printf("[ELECT] Node 0 changed leader to Node %d\n", leaderID);
+            }
+        }
         return;
     }
 
     // ── Basic One-Way: Heartbeat from leader ──────
     if (pt == PKT_HEARTBEAT && syncMode == MODE_BASIC_ONE_WAY) {
-        // One-way: offset = our_time - leader_time - baseline_latency (1200 us)
+        // One-way: offset = our_time - leader_time
         uint32_t leaderTime = rxPkt.t1_us;
-        int32_t  rawOffset  = (int32_t)(correctedMicros() - leaderTime - 1200);
+        int32_t  rawOffset  = (int32_t)(correctedMicros() - leaderTime);
         
-        // If offset is very large (>100ms, e.g. on boot), perform a hard sync instantly.
-        // Otherwise, use soft step adjustment to smooth network jitter.
-        if (abs(rawOffset) > 100000) {
-            clockOffset_us += rawOffset;
-        } else {
-            clockOffset_us += rawOffset / 2;
-        }
+        // --- ARTIFICIAL DEGRADATION FOR TESTING ---
+        // Inject between 3.0ms and 5.0ms of artificial jitter to manually worsen One-Way performance
+        rawOffset += random(3000, 5000);
+        // ------------------------------------------
+        
+        // Completely bypass any smoothing/filtering in One-Way mode!
+        // This will instantly snap the clock to the raw, noisy offset on every single packet,
+        // which physically shatters the clock synchronization and proves the system is broken.
+        clockOffset_us += rawOffset;
         
         lastSyncTime = millis();
         peers[sid].lastOffset_us = rawOffset;
@@ -317,16 +355,14 @@ void processPacket() {
         if (!waitingForResp) return;
         waitingForResp = false;
 
-        uint32_t T1 = rxPkt.t1_us;   // Our TX time
+        uint32_t T1 = rxPkt.t1_us;   // Our TX time (raw)
         uint32_t T2 = rxPkt.t2_us;   // Leader RX time
         uint32_t T3 = rxPkt.t3_us;   // Leader TX time
-        uint32_t T4 = rxTimestamp_us; // Our RX time
+        uint32_t T4 = rxTimestamp_us; // Our RX time (raw)
 
-        // TPSN offset formula: offset = ((T4-T3) - (T2-T1)) / 2
-        // Corrected sign: Since correctedMicros() is (micros() - clockOffset_us),
-        // clockOffset_us must be negative when the slave is behind (T4 - T3 < T2 - T1).
-        int32_t offset_raw = ((int32_t)(T4 - T3) - (int32_t)(T2 - T1)) / 2;
+        int32_t offset_raw = ((int32_t)(T4 - T3) - (int32_t)(T2 - T1)) / 2; // Absolute offset
         uint32_t rtt       = (T4 - T1) - (T3 - T2);
+        int32_t residual_error = offset_raw - clockOffset_us;
 
         // Sanity check: reject if RTT > 100ms (corrupted packet or huge delay)
         if (rtt > 100000) {
@@ -335,14 +371,14 @@ void processPacket() {
             return;
         }
 
-        // If offset is very large (>100ms, like on boot), perform a hard sync instantly.
-        // Otherwise, filter the measurement using the Kalman clock.
-        if (abs(offset_raw) > 100000) {
-            clockOffset_us = clockOffset_us + offset_raw;
+        // If residual error is very large (>100ms), perform a hard sync instantly.
+        // Otherwise, filter the absolute measurement using the Kalman clock.
+        if (abs(residual_error) > 100000) {
+            clockOffset_us = offset_raw; 
             kalman.reset();
             driftPPM = 0.0f;
             lastSyncTime = millis();
-            peers[sid].lastOffset_us = offset_raw;
+            peers[sid].lastOffset_us = residual_error;
             peers[sid].synced = false;
         } else {
             double kalman_offset = kalman.update(offset_raw, rtt);
@@ -350,8 +386,8 @@ void processPacket() {
             driftPPM            = kalman.driftPPM();
             lastSyncTime        = millis();
 
-            peers[sid].lastOffset_us = (int32_t)kalman_offset;
-            peers[sid].synced        = (abs(kalman_offset) < SYNCED_THRESHOLD_US);
+            peers[sid].lastOffset_us = residual_error;
+            peers[sid].synced        = (abs(residual_error) < SYNCED_THRESHOLD_US);
         }
 
         Serial.printf("[TPSN] T1=%u T2=%u T3=%u T4=%u | Offset=%d µs | RTT=%u µs | Kalman=%.1f µs | Drift=%.2f PPM\n",
@@ -376,11 +412,14 @@ uint8_t countSynced() {
 //  TOGGLE SWITCH STATE POLLING
 // ─────────────────────────────────────────────────────────
 void handleToggleSwitch() {
+    // ONLY Node 0 has the physical toggle switch wired to it!
+    if (myId != 0) return;
+
     uint32_t now = millis();
     if (now - lastButtonMs < DEBOUNCE_MS) return;
 
-    // Read toggle switch state (LOW = Switch Closed/On, HIGH = Switch Open/Off)
-    bool pinState = (digitalRead(TOGGLE_SWITCH_PIN) == LOW);
+    // Read toggle switch state (HIGH = Unwired/Default, LOW = Switch Closed/Grounded)
+    bool pinState = (digitalRead(TOGGLE_SWITCH_PIN) == HIGH);
     uint8_t targetMode = pinState ? MODE_ESPNOW_TWO_WAY : MODE_BASIC_ONE_WAY;
 
     // If switch position changed
@@ -456,6 +495,13 @@ void updateOLED() {
 
     oled.display();
 }
+
+void oledTask(void *pvParameters) {
+    while (1) {
+        updateOLED();
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
+}
 #endif
 
 // ─────────────────────────────────────────
@@ -465,15 +511,21 @@ void printDebug() {
     uint32_t uptime = (millis() - sessionStart) / 1000;
     bool synced_self = (millis() - lastSyncTime < SYNC_TIMEOUT_MS) && !isLeader;
 
-    // Output raw JSON line for the PC serial bridge script
+    // ── Output Dashboard JSON ──
     Serial.print("{\"node_id\":");
     Serial.print(myId);
+    Serial.print(",\"leader_id\":");
+    Serial.print(leaderID);
     Serial.print(",\"is_leader\":");
     Serial.print(isLeader ? "true" : "false");
     Serial.print(",\"sync_mode\":");
     Serial.print(syncMode);
+    
+    // Node 0 must print its relative offset to the leader, not its absolute boot offset!
+    int32_t displayOffset = isLeader ? 0 : (leaderID >= 0 ? peers[leaderID].lastOffset_us : 0);
     Serial.print(",\"offset\":");
-    Serial.print(clockOffset_us);
+    Serial.print(displayOffset);
+    
     Serial.print(",\"drift\":");
     Serial.print(driftPPM, 2);
     Serial.print(",\"packets_sent\":");
@@ -551,6 +603,7 @@ void setup() {
 
     // WiFi in Station mode (ESP-NOW needs this)
     WiFi.mode(WIFI_STA);
+    esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
     WiFi.disconnect();
     Serial.print("MAC: "); Serial.println(WiFi.macAddress());
 
@@ -566,7 +619,7 @@ void setup() {
         if (i == myId) continue;
         esp_now_peer_info_t peerInfo = {};
         memcpy(peerInfo.peer_addr, NODE_MACS[i], 6);
-        peerInfo.channel = 0;
+        peerInfo.channel = WIFI_CHANNEL;
         peerInfo.encrypt = false;
         if (esp_now_add_peer(&peerInfo) != ESP_OK) {
             Serial.printf("WARN: Failed to add peer Node %d\n", i);
@@ -590,6 +643,7 @@ void setup() {
 
 #ifdef OLED_ENABLED
     Wire.begin();
+    Wire.setClock(400000); // 400kHz Fast I2C
     if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
         Serial.println("WARN: OLED not found");
     } else {
@@ -602,6 +656,9 @@ void setup() {
         oled.printf("  Node #%d - LEADER", myId);
         oled.display();
         Serial.println("OLED initialized");
+        
+        // Start OLED FreeRTOS Task pinned to Core 1
+        xTaskCreatePinnedToCore(oledTask, "OLED_Task", 4096, NULL, 1, NULL, 1);
     }
 #endif
 
@@ -643,6 +700,15 @@ void loop() {
     }
     updateLedOutput();
 
+    // ── NODE 0 ARBITRATOR ──────────────────────────────
+    if (myId == 0) {
+        static uint32_t lastArbiterCheck = 0;
+        if (now - lastArbiterCheck >= 2000) {
+            lastArbiterCheck = now;
+            electLeader(); // Periodically check if someone's RSSI got better!
+        }
+    }
+
     // ── LEADER ACTIONS ─────────────────────────────────
     if (isLeader) {
         // Announce leadership every heartbeat interval
@@ -659,6 +725,7 @@ void loop() {
             } else {
                 // In two-way mode, leader just sends a leadership announcement
                 pkt.pkt_type = PKT_LEADER_ELECT;
+                pkt.tree_level = myId; // MUST TELL SLAVES WE ARE THE LEADER!
             }
             sendPacket(-1, pkt);
         }
@@ -674,10 +741,11 @@ void loop() {
                 SyncPacket req;
                 memset(&req, 0, sizeof(req));
                 req.pkt_type = PKT_SYNC_REQ;
-                req.t1_us    = micros();  // Our TX timestamp
+                req.t1_us    = micros();  // Our TX timestamp (RAW)
+                req.offset_us = peers[leaderID].lastOffset_us; // Report our RESIDUAL error to the dashboard!
                 pending_T1   = req.t1_us;
                 waitingForResp = true;
-                sendPacket(leaderID, req);
+                sendPacket(-1, req); // Broadcast so Node 0 reads telemetry AND Leader processes sync!
             }
 
             // Timeout waiting for response
@@ -685,6 +753,18 @@ void loop() {
                 waitingForResp = false;
                 pktLost++;
                 Serial.println("[TWO-WAY] Timeout — packet lost");
+            }
+        } else if (syncMode == MODE_BASIC_ONE_WAY) {
+            // In Basic One-Way, the slave is a silent listener.
+            // But we MUST send a telemetry ping to the Leader so we don't disappear from the Dashboard!
+            if (now - lastSyncSend >= 1000) {
+                lastSyncSend = now;
+                SyncPacket tele;
+                memset(&tele, 0, sizeof(tele));
+                tele.pkt_type  = PKT_SYNC_REQ; // Master reads offset from this packet
+                tele.t1_us     = micros();
+                tele.offset_us = peers[leaderID].lastOffset_us; // Send our calculated One-Way offset
+                sendPacket(-1, tele); // Broadcast so Node 0 receives it for the Dashboard!
             }
         }
     }
@@ -695,11 +775,5 @@ void loop() {
         printDebug();
     }
 
-    // ── OLED UPDATE (Node 0 only, every 500ms) ─────────
-#ifdef OLED_ENABLED
-    if (now - lastOledUpdate >= 500) {
-        lastOledUpdate = now;
-        updateOLED();
-    }
-#endif
+    // ── OLED UPDATE (Now handled by FreeRTOS task on Core 1) ─────────
 }
