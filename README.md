@@ -42,4 +42,4 @@ In an extensive empirical stress test utilizing over 177,000 telemetry packets, 
 * **Tree-Level Topology:** Migrating from a flat mesh to a hierarchical routing system to support massive swarms (100+ nodes) without risking 2.4GHz broadcast storms.
 
 ---
-*Developed by Gopal Bansal, Vinay Krishna BV, Rohan K G, and Inaya J Gujaran at RV College of Engineering.*
+
