@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────
 // Which node number is THIS board? (0 = leader candidate)
 // You set this per-board before flashing. Node 0 has the OLED.
-#define THIS_NODE_ID   2   // ← Change per board: 0, 1, 2, 3, or 4
+#define THIS_NODE_ID   3   // ← Change per board: 0, 1, 2, 3, or 4
 
 // MAC addresses of all 5 sync nodes (filled from physical nodes telemetry)
 // Node 0: 30:AE:A4:8C:1B:D4
@@ -30,9 +30,8 @@ const uint8_t NODE_MACS[NODE_COUNT][6] = {
 // ─────────────────────────────────────────────
 //  LED PINS  (connect LED → 220Ω → pin)
 // ─────────────────────────────────────────────
-#define LED_GREEN   25    // Synchronized / Elected Leader
-#define LED_YELLOW  26    // Synchronizing in progress
-#define LED_RED     27    // Unsynchronized / Drifted / Fault
+#define LED_PPS     25    // Blinks for 50ms at the exact start of every second (Green LED)
+#define LED_MODE    27    // Protocol Mode Indicator (White/Green LED)
 
 // ─────────────────────────────────────────────
 //  TOGGLE SWITCH (External physical toggle switch)

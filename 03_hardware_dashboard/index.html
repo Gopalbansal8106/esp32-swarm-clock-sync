@@ -109,7 +109,7 @@
         /* MAIN CONTENT */
         .main-content { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
 
-        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
         .metric-card {
             background: var(--bg-card);
             border: 1px solid var(--border);
@@ -125,6 +125,13 @@
         .metric-card::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--primary); }
         .metric-card.success::after { background: var(--success); }
         .metric-card.warning::after { background: var(--warning); }
+        .metric-card.danger::after { background: #ef4444; }
+        .metric-card.danger { animation: pulse 1.5s infinite; }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
         
         .metric-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
         .metric-value { font-size: 22px; font-weight: 800; color: var(--text-main); font-family: 'JetBrains Mono', monospace; }
@@ -244,6 +251,10 @@
                     <span class="metric-label">Flight Uptime</span>
                     <span class="metric-value" id="metric-uptime">0.0s</span>
                 </div>
+                <div class="metric-card success" id="card-jammer">
+                    <span class="metric-label">RF Jammer</span>
+                    <span class="metric-value" id="metric-jammer">OFF</span>
+                </div>
             </div>
 
             <div class="panel chart-panel">
@@ -254,6 +265,11 @@
             <div class="panel hist-panel">
                 <div class="panel-header">Error Distribution (Histogram)</div>
                 <div class="chart-wrapper" id="hist-chart"></div>
+            </div>
+
+            <div class="panel trace-panel" style="margin-top: 15px;">
+                <div class="panel-header">Individual Node Tracking</div>
+                <div class="chart-wrapper" id="node-traces-chart" style="height: 200px;"></div>
             </div>
         </div>
 
@@ -317,6 +333,23 @@
             const leader = state.nodes.find(n => n.is_elected_ref);
             document.getElementById('metric-leader').textContent = leader ? `UAV-${leader.node_id}` : 'None';
             document.getElementById('metric-error').textContent = `${(state.avg_sync_error * 1000).toFixed(2)} ms`;
+
+            const jamInt = state.jammer_intensity || 0;
+            const jamCard = document.getElementById('card-jammer');
+            const jamText = document.getElementById('metric-jammer');
+            if (jamInt === 0) {
+                jamText.textContent = 'OFF';
+                jamCard.className = 'metric-card success';
+            } else if (jamInt === 1) {
+                jamText.textContent = 'LIGHT (33%)';
+                jamCard.className = 'metric-card warning';
+            } else if (jamInt === 2) {
+                jamText.textContent = 'HEAVY (66%)';
+                jamCard.className = 'metric-card warning';
+            } else {
+                jamText.textContent = 'FULL (100%)';
+                jamCard.className = 'metric-card danger';
+            }
 
             const container = document.getElementById('nodes-container');
             container.innerHTML = '';
@@ -420,13 +453,14 @@
                 paper_bgcolor: 'transparent', plot_bgcolor: 'transparent'
             };
 
-            // Histogram
+            // Bar Chart: Plot the instantaneous offset of each individual drone!
+            // Histogram (Error Distribution)
+            // Reverting to the original design as requested, but omitting 'xbins' so Plotly auto-scales without crashing!
             const dataHist = [{
                 x: y,
                 type: 'histogram',
                 marker: { color: '#6366f1' },
-                opacity: 0.7,
-                xbins: { size: 0.5 }
+                opacity: 0.7
             }];
 
             const layoutHist = {
@@ -437,13 +471,46 @@
                 bargap: 0.1
             };
 
+            // Individual Node Traces
+            let nodeData = [];
+            if (state.node_traces) {
+                const availableColors = ['#f43f5e', '#10b981', '#f59e0b', '#8b5cf6', '#0ea5e9'];
+                let colorIdx = 0;
+                for (const [nid, trace] of Object.entries(state.node_traces)) {
+                    nodeData.push({
+                        x: trace.x,
+                        y: trace.y,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Node ' + nid,
+                        line: { width: 2, color: availableColors[colorIdx % availableColors.length] }
+                    });
+                    colorIdx++;
+                }
+            }
+            
+            const layoutNode = {
+                margin: { t: 10, r: 10, b: 30, l: 40 },
+                xaxis: { title: 'Time (s)', color: '#64748b', gridcolor: '#f1f5f9' },
+                yaxis: { title: 'Offset (ms)', color: '#64748b', gridcolor: '#f1f5f9' },
+                paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+                showlegend: true,
+                legend: { orientation: "h", y: 1.2 }
+            };
+
             if (!chartInit) { 
                 Plotly.newPlot('offset-chart', dataLine, layoutLine, { displayModeBar: false, responsive: true }); 
                 Plotly.newPlot('hist-chart', dataHist, layoutHist, { displayModeBar: false, responsive: true }); 
-                chartInit = true; 
+                if(document.getElementById('node-traces-chart')) {
+                    Plotly.newPlot('node-traces-chart', nodeData, layoutNode, { displayModeBar: false, responsive: true }); 
+                }
+                chartInit = true;
             } else { 
                 Plotly.react('offset-chart', dataLine, layoutLine); 
                 Plotly.react('hist-chart', dataHist, layoutHist); 
+                if(document.getElementById('node-traces-chart')) {
+                    Plotly.react('node-traces-chart', nodeData, layoutNode); 
+                }
             }
         }
 
@@ -453,6 +520,9 @@
             if(chartInit) {
                 Plotly.Plots.resize('offset-chart');
                 Plotly.Plots.resize('hist-chart');
+                if(document.getElementById('node-traces-chart')) {
+                    Plotly.Plots.resize('node-traces-chart');
+                }
             }
         });
     </script>

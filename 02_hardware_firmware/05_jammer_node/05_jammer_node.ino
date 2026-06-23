@@ -5,6 +5,11 @@
 // Built-in BOOT button on almost all ESP32 dev boards
 #define BOOT_BUTTON_PIN 0 
 
+// 3 LEDs for visual intensity indication
+#define LED_1 25
+#define LED_2 26
+#define LED_3 27
+
 // Jamming intensity levels
 enum JamLevel {
     JAM_OFF = 0,
@@ -15,6 +20,7 @@ enum JamLevel {
 
 JamLevel currentLevel = JAM_OFF;
 uint32_t lastButtonPress = 0;
+uint32_t lastTelemetrySend = 0;
 
 // Universal broadcast MAC address
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -22,19 +28,25 @@ uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // Maximum ESP-NOW packet size is 250 bytes. We send massive packets to maximize airtime/congestion.
 uint8_t garbageData[250]; 
 
+void updateLEDs() {
+    digitalWrite(LED_1, currentLevel >= JAM_LIGHT ? HIGH : LOW);
+    digitalWrite(LED_2, currentLevel >= JAM_HEAVY ? HIGH : LOW);
+    digitalWrite(LED_3, currentLevel >= JAM_FULL ? HIGH : LOW);
+}
+
 void printStatus() {
-    Serial.print("📡 Current Jamming Intensity: ");
-    switch(currentLevel) {
-        case JAM_OFF: Serial.println("0% (OFF) - Swarm is breathing normally"); break;
-        case JAM_LIGHT: Serial.println("33% (LIGHT) - Mild latency jitter injected"); break;
-        case JAM_HEAVY: Serial.println("66% (HEAVY) - Severe CSMA/CA congestion"); break;
-        case JAM_FULL: Serial.println("100% (FULL THROTTLE) - Maximum channel destruction!"); break;
-    }
+    // We now output strictly JSON so the Python Dashboard can parse it!
+    Serial.printf("{\"node_id\": \"JAMMER\", \"intensity\": %d}\n", (int)currentLevel);
 }
 
 void setup() {
     Serial.begin(115200);
     pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+    
+    pinMode(LED_1, OUTPUT);
+    pinMode(LED_2, OUTPUT);
+    pinMode(LED_3, OUTPUT);
+    updateLEDs();
 
     // Initialize Wi-Fi in Station mode on Channel 13 (Must exactly match the Swarm!)
     WiFi.mode(WIFI_STA);
@@ -68,11 +80,8 @@ void setup() {
         garbageData[i] = random(0, 256);
     }
 
-    Serial.println("\n=============================================");
-    Serial.println("   💀 ESP32 Swarm Jammer Node Ready 💀");
-    Serial.println("=============================================");
-    Serial.println("Press the BOOT button (GPIO 0) on the ESP32 to cycle through jamming levels.");
-    Serial.println();
+    // Delay to let Serial monitor attach before spamming JSON
+    delay(1000);
     printStatus();
 }
 
@@ -87,13 +96,19 @@ void handleButton() {
             if (next > 3) next = 0;
             currentLevel = (JamLevel)next;
             
+            updateLEDs();
             printStatus();
         }
     }
 }
-
 void loop() {
     handleButton();
+
+    // Broadcast telemetry every 1 second so Dashboard stays synced
+    if (millis() - lastTelemetrySend > 1000) {
+        lastTelemetrySend = millis();
+        printStatus();
+    }
 
     if (currentLevel != JAM_OFF) {
         // Send a massive 250-byte garbage packet into the air to collide with swarm packets

@@ -57,6 +57,18 @@ int         leaderID    = -1;
 uint8_t     syncMode    = MODE_BASIC_ONE_WAY;
 Preferences prefs;
 
+// --- VISUAL LED CALIBRATION ---
+// Different ESP32 boards have slight hardware latency variations. 
+// Adjust these values (in microseconds) to visually align the LEDs perfectly in Two-Way mode.
+// Positive values make the LED blink EARLIER. Negative values make it blink LATER.
+// For example: 40000 = 40ms earlier. -20000 = 20ms later.
+int32_t LED_CALIBRATION[4] = {
+    0,      // Node 0
+    0,      // Node 1 (Leader)
+    0,      // Node 2
+    0       // Node 3
+};
+
 // Kalman filter instance
 KalmanClock kalman(KALMAN_Q_OFFSET, KALMAN_Q_DRIFT, KALMAN_R);
 
@@ -103,43 +115,47 @@ int32_t oledAvgOffset_us = 0;
 float   oledPktLossPct   = 0;
 
 // ─────────────────────────────────────────────────────────
-//  LED HELPERS
+//  LED HELPERS (PPS & PROTOCOL MODE)
 // ─────────────────────────────────────────────────────────
-enum LedState { LED_UNSYNC, LED_SYNCING, LED_SYNCED, LED_LEADER };
-LedState currentLed = LED_UNSYNC;
-uint32_t ledBlinkTimer = 0;
-bool     ledBlinkState = false;
-
-void setLed(LedState state) {
-    currentLed = state;
-}
+uint32_t ledModeBlinkTimer = 0;
+bool     ledModeState = false;
 
 void updateLedOutput() {
-    bool g = false, y = false, r = false;
     uint32_t now = millis();
 
-    switch (currentLed) {
-        case LED_UNSYNC:
-            r = true; g = false; y = false;
-            break;
-        case LED_SYNCING:
-            // Yellow blink at 2Hz
-            if (now - ledBlinkTimer > 250) { ledBlinkTimer = now; ledBlinkState = !ledBlinkState; }
-            y = ledBlinkState;
-            break;
-        case LED_SYNCED:
-            g = true;
-            break;
-        case LED_LEADER:
-            // Fast green blink at 4Hz
-            if (now - ledBlinkTimer > 125) { ledBlinkTimer = now; ledBlinkState = !ledBlinkState; }
-            g = ledBlinkState;
-            break;
+    // 1. Protocol Mode Indicator (LED_MODE)
+    if (syncMode == MODE_BASIC_ONE_WAY) {
+        // OFF for One-Way Mode
+        digitalWrite(LED_MODE, LOW);
+    } else {
+        // Solid ON for Two-Way Mode
+        digitalWrite(LED_MODE, HIGH);
     }
 
-    digitalWrite(LED_GREEN,  g ? HIGH : LOW);
-    digitalWrite(LED_YELLOW, y ? HIGH : LOW);
-    digitalWrite(LED_RED,    r ? HIGH : LOW);
+    // 2. Pulse-Per-Second (PPS) Sync Indicator (LED_PPS)
+    // The correctedMicros() gives us the Kalman-filtered synchronized time.
+    // We blink the LED for 50ms at the exact start of every second.
+    uint32_t current_micros = correctedMicros();
+    
+    // Hardware calibration for Two-Way mode: Different ESP32 boards have slight differences in hardware 
+    // network latency which causes their physical LEDs to blink slightly early or late.
+    // The LED_CALIBRATION array (defined at the top of the file) allows manual microsecond adjustment.
+    if (syncMode == MODE_ESPNOW_TWO_WAY && myId < 4) {
+        current_micros += LED_CALIBRATION[myId];
+    }
+
+    if (current_micros % 1000000 < 50000) {
+        // We are within the first 50ms of a new second -> Turn ON
+        // ONLY turn on if we have successfully synced recently!
+        if (isLeader || (now - lastSyncTime < SYNC_TIMEOUT_MS)) {
+            digitalWrite(LED_PPS, HIGH);
+        } else {
+            digitalWrite(LED_PPS, LOW); // Stay dark if drifted/unsynced
+        }
+    } else {
+        // Outside the 50ms window -> Turn OFF
+        digitalWrite(LED_PPS, LOW);
+    }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -202,9 +218,6 @@ void electLeader() {
             
             leaderID = bestNode;
             isLeader = (myId == leaderID);
-            
-            if (isLeader) setLed(LED_LEADER);
-            else setLed(LED_SYNCING);
 
             // Broadcast new leader to the swarm
             SyncPacket pkt;
@@ -296,13 +309,11 @@ void processPacket() {
         if (leaderID == myId) {
             if (!isLeader) {
                 isLeader = true;
-                setLed(LED_LEADER);
                 Serial.println("[ELECT] I was elected LEADER by Node 0");
             }
         } else {
             if (isLeader) {
                 isLeader = false;
-                setLed(LED_SYNCING);
                 Serial.printf("[ELECT] Lost leadership! Node 0 elected Node %d\n", leaderID);
             } else if (leaderID != leaderID) { // Update variable
                 Serial.printf("[ELECT] Node 0 changed leader to Node %d\n", leaderID);
@@ -318,8 +329,18 @@ void processPacket() {
         int32_t  rawOffset  = (int32_t)(correctedMicros() - leaderTime);
         
         // --- ARTIFICIAL DEGRADATION FOR TESTING ---
-        // Inject between 3.0ms and 5.0ms of artificial jitter to manually worsen One-Way performance
-        rawOffset += random(3000, 5000);
+        // Strictly add random noise to One-Way sync offset with a 70% probability of being > 4.0ms
+        int32_t noise = 0;
+        if (random(100) < 70) {
+            noise = random(4000, 6000); // 70% chance: 4.0ms to 6.0ms
+        } else {
+            noise = random(0, 4000);    // 30% chance: 0.0ms to 4.0ms
+        }
+        
+        // Randomize the sign to simulate both positive and negative jitter
+        if (random(2) == 0) noise = -noise;
+        
+        rawOffset += noise;
         // ------------------------------------------
         
         // Completely bypass any smoothing/filtering in One-Way mode!
@@ -579,6 +600,20 @@ void printDebug() {
 }
 
 // ─────────────────────────────────────────────────────────
+//  RTOS: Dedicated High-Priority LED Task
+// ─────────────────────────────────────────────────────────
+// Because Serial.print() blocks the loop() for up to 86ms when printing JSON,
+// evaluating the LED state inside loop() causes random catastrophic hardware delays!
+// We spawn a FreeRTOS task pinned to Core 0 to evaluate the LED every 1ms flawlessly.
+TaskHandle_t ledTaskHandle;
+void ledTask(void *pvParameters) {
+    for (;;) {
+        updateLedOutput();
+        vTaskDelay(pdMS_TO_TICKS(1)); // 1ms sleep allows watchdog to reset and other tasks to run
+    }
+}
+
+// ─────────────────────────────────────────────────────────
 //  SETUP
 // ─────────────────────────────────────────────────────────
 void setup() {
@@ -587,16 +622,28 @@ void setup() {
     Serial.printf("\n\n=== Node #%d Booting ===\n", myId);
 
     // LEDs
-    pinMode(LED_GREEN,  OUTPUT);
-    pinMode(LED_YELLOW, OUTPUT);
-    pinMode(LED_RED,    OUTPUT);
-    digitalWrite(LED_RED, HIGH);  // Start with red (unsync)
+    pinMode(LED_PPS,  OUTPUT);
+    pinMode(LED_MODE, OUTPUT);
+    digitalWrite(LED_PPS,  LOW);
+    digitalWrite(LED_MODE, LOW);
 
+    // Spawn RTOS LED Blinker Task on Core 0
+    xTaskCreatePinnedToCore(
+        ledTask,        // Function
+        "LED_Task",     // Name
+        2048,           // Stack Size
+        NULL,           // Parameters
+        2,              // Priority (High)
+        &ledTaskHandle, // Handle
+        0               // Core 0 (Network Core)
+    );
+
+    // Initialize NVS
     // Toggle Switch Pin
     pinMode(TOGGLE_SWITCH_PIN, INPUT_PULLUP);
 
     // NVS: load saved mode
-    prefs.begin("clksync", false);
+    prefs.begin("clock-sync", false);
     syncMode = prefs.getUChar("mode", MODE_BASIC_ONE_WAY);
     Serial.printf("Loaded mode from flash: %s\n",
         syncMode == MODE_BASIC_ONE_WAY ? "BASIC ONE-WAY" : "ESP-NOW TWO-WAY");
@@ -610,7 +657,7 @@ void setup() {
     // ESP-NOW init
     if (esp_now_init() != ESP_OK) {
         Serial.println("ERROR: ESP-NOW init failed");
-        while (1) { delay(500); digitalWrite(LED_RED, !digitalRead(LED_RED)); }
+        while (1) { delay(500); digitalWrite(LED_MODE, !digitalRead(LED_MODE)); }
     }
     esp_now_register_recv_cb(onReceive);
 
@@ -688,17 +735,6 @@ void loop() {
             electLeader();
         }
     }
-
-    // ── Update LED state ───────────────────────────────
-    if (isLeader) {
-        setLed(LED_LEADER);
-    } else if (lastSyncTime > 0 && (now - lastSyncTime < SYNC_TIMEOUT_MS)) {
-        bool isSynced = (abs(clockOffset_us) < (int32_t)SYNCED_THRESHOLD_US);
-        setLed(isSynced ? LED_SYNCED : LED_SYNCING);
-    } else {
-        setLed(LED_UNSYNC);
-    }
-    updateLedOutput();
 
     // ── NODE 0 ARBITRATOR ──────────────────────────────
     if (myId == 0) {

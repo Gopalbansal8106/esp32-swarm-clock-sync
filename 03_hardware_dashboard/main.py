@@ -50,12 +50,14 @@ hardware_state = {
     "total_packets_lost": 0,
     "avg_sync_error": 0.0,
     "sync_history": [],
+    "node_traces": {},
     "global_time": 0.0,
-    "sync_active": True
+    "sync_active": True,
+    "jammer_intensity": 0
 }
 
-serial_connection = None
-selected_port = None
+serial_connections = {}
+serial_lock = threading.Lock()
 start_time = time.time()
 
 # Setup CSV Database Logging
@@ -71,7 +73,8 @@ with open(csv_filename, 'w', newline='') as f:
         "Total_Sent", "Total_Lost", 
         "Target_Node_ID", "Is_Alive", "Is_Synced", 
         "Raw_Offset_us", "Drift_PPM", "RSSI_dBm", 
-        "Running_Avg_Offset_us", "Running_StdDev_us"
+        "Running_Avg_Offset_us", "Running_StdDev_us",
+        "Jammer_Intensity"
     ])
 
 # Periodically broadcast state to browser
@@ -126,30 +129,44 @@ def handle_frontend_command(cmd: dict):
         mode = cmd.get("mode", "espnow")
         # Send mode switch command byte to ESP32: 'B' for basic, 'E' for espnow
         command_char = b'E' if mode == "espnow" else b'B'
-        try:
-            serial_connection.write(command_char)
-            print(f"🔌 Sent mode switch command to ESP32: {mode} ({command_char})")
-        except Exception as e:
-            print(f"❌ Error sending command over serial: {e}")
+
+        def background_write():
+            # Copy items to list to prevent RuntimeError if dict changes size
+            for port, conn in list(serial_connections.items()):
+                try:
+                    if conn and conn.is_open:
+                        conn.write(command_char)
+                        print(f"🔌 Sent mode switch command to {port}: {mode} ({command_char})")
+                except Exception as e:
+                    print(f"❌ Error sending command over serial {port}: {e}")
+                    
+        # Run the blocking serial writes in a background thread so it doesn't freeze the dashboard!
+        asyncio.create_task(asyncio.to_thread(background_write))
 
 @app.get("/")
 async def get_index():
     return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"))
 
 def run_serial_reader(port):
-    """Runs in background thread, parses serial JSON streams"""
-    global serial_connection, hardware_state
+    """Background thread to constantly read JSON lines from a specific Serial port"""
+    global hardware_state, serial_connections
     print(f"⚡ Serial Reader Thread: listening on {port}...")
     
+    conn = None
     while True:
         try:
-            if not serial_connection or not serial_connection.is_open:
-                serial_connection = serial.Serial(port, 115200, timeout=1)
-                serial_connection.reset_input_buffer()
+            if not conn or not conn.is_open:
+                # Added write_timeout to prevent hanging if a port is frozen
+                conn = serial.Serial(port, 115200, timeout=1, write_timeout=0.1)
+                conn.reset_input_buffer()
+                with serial_lock:
+                    serial_connections[port] = conn
                 print(f"🔌 Serial port {port} opened successfully.")
             
-            if serial_connection.in_waiting > 0:
-                line = serial_connection.readline().decode('utf-8', errors='ignore').strip()
+            # Process all lines currently in the buffer before sleeping!
+            # If we only process one line and then sleep 10ms, we can't keep up with the ESP32's 15-line printDebug() bursts.
+            while conn.in_waiting > 0:
+                line = conn.readline().decode('utf-8', errors='ignore').strip()
                 
                 # Strip leading timestamp prefix if present (e.g., "16:57:25.280 -> { ... }")
                 start_idx = line.find("{")
@@ -163,14 +180,17 @@ def run_serial_reader(port):
                     except json.JSONDecodeError:
                         pass
         except Exception as e:
-            print(f"⚠️ Serial connection error: {e}. Reconnecting in 2s...")
-            if serial_connection:
+            # If device disconnected, close the handle so it can reconnect later
+            if conn:
                 try:
-                    serial_connection.close()
-                except Exception:
+                    conn.close()
+                except:
                     pass
-                serial_connection = None
-            time.sleep(2)
+                with serial_lock:
+                    serial_connections.pop(port, None)
+            conn = None
+            
+        # Only sleep once the buffer is entirely empty!
         time.sleep(0.01)
 
 def update_hardware_state(raw: dict):
@@ -178,18 +198,22 @@ def update_hardware_state(raw: dict):
     global hardware_state
     
     node_id = raw.get("node_id", 0)
+
+    # Intercept Jammer Telemetry
+    if node_id == "JAMMER":
+        jam_val = raw.get("intensity", 0)
+        hardware_state["jammer_intensity"] = jam_val
+        print(f"🔴 JAMMER UPDATE RECEIVED: Intensity {jam_val}")
+        return
+        
+    # Print bridge telemetry
+    print(f"📡 Swarm Node {node_id} Telemetry Received")
     is_leader = raw.get("is_leader", False)
     leader_id = raw.get("leader_id", node_id if is_leader else -1)
     mode_id = raw.get("sync_mode", 0)
     offset_us = raw.get("offset", 0)
         
-    # Strictly add random noise to One-Way sync offset with a 70% probability of being > 4.0ms
-    if mode_id == 0 and node_id != leader_id:
-        if random.random() < 0.70:
-            noise = random.uniform(4000, 6000) # 70% chance: 4.0ms to 6.0ms
-        else:
-            noise = random.uniform(0, 4000)    # 30% chance: 0.0ms to 4.0ms
-        offset_us = abs(offset_us) + noise
+
         
     drift_ppm = raw.get("drift", 0.0)
     pkt_sent = raw.get("packets_sent", 0)
@@ -216,7 +240,8 @@ def update_hardware_state(raw: dict):
             pkt_sent, pkt_lost,
             node_id, True, True, 
             offset_us, drift_ppm, 0,
-            avg_0, std_0
+            avg_0, std_0,
+            hardware_state["jammer_intensity"]
         ])
         
         for p in peers_list:
@@ -225,13 +250,7 @@ def update_hardware_state(raw: dict):
             p_synced = p.get("synced", False)
             p_offset = p.get("offset", 0)
             
-            # Strictly add random noise to One-Way sync peer offset with a 70% probability of being > 4.0ms
-            if mode_id == 0 and pid != leader_id:
-                if random.random() < 0.70:
-                    noise = random.uniform(4000, 6000) # 70% chance: 4.0ms to 6.0ms
-                else:
-                    noise = random.uniform(0, 4000)    # 30% chance: 0.0ms to 4.0ms
-                p_offset = abs(p_offset) + noise
+
 
             p_drift = p.get("drift", 0.0)
             p_rssi = p.get("rssi", -127)
@@ -247,7 +266,8 @@ def update_hardware_state(raw: dict):
                 pkt_sent, pkt_lost,
                 pid, p_alive, p_synced, 
                 p_offset, p_drift, p_rssi,
-                avg_p, std_p
+                avg_p, std_p,
+                hardware_state["jammer_intensity"]
             ])
 
     # Rebuild nodes state
@@ -313,24 +333,34 @@ def update_hardware_state(raw: dict):
     if len(hardware_state["sync_history"]) > 100:
         hardware_state["sync_history"].pop(0)
 
+    # Update per-node traces
+    for n in hardware_state["nodes"]:
+        nid = n["node_id"]
+        if nid not in hardware_state["node_traces"]:
+            hardware_state["node_traces"][nid] = {"x": [], "y": []}
+        
+        hardware_state["node_traces"][nid]["x"].append(cur_time)
+        hardware_state["node_traces"][nid]["y"].append(n["offset"] * 1000) # Store in ms
+        
+        if len(hardware_state["node_traces"][nid]["x"]) > 100:
+            hardware_state["node_traces"][nid]["x"].pop(0)
+            hardware_state["node_traces"][nid]["y"].pop(0)
+
 if __name__ == "__main__":
     print("==================================================")
     print("         ESP32 Clock Sync Hardware Bridge         ")
     print("==================================================")
     ports = [p.device for p in serial.tools.list_ports.comports()]
     if not ports:
-        print("[!] No serial COM ports detected! Defaulting to COM16.")
-        port = "COM16"
+        print("[!] No serial COM ports detected!")
     else:
         print("Available COM Ports:")
         for idx, p in enumerate(ports):
             print(f"  [{idx}] {p}")
-        print("Bypassing prompt, defaulting to index 0.")
-        port = ports[0]
-            
-    # Start background reader thread
-    t = threading.Thread(target=run_serial_reader, args=(port,), daemon=True)
-    t.start()
+            # Spawn a reader thread for EVERY available COM port!
+            # This allows us to read the Swarm Bridge and the Jammer simultaneously.
+            t = threading.Thread(target=run_serial_reader, args=(p,), daemon=True)
+            t.start()
 
     # Launch dashboard web app
     print("Starting Dashboard on http://localhost:8081...")
